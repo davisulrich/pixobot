@@ -28,6 +28,14 @@
     "plugins": [
       "expo-router",
       [
+        "expo-camera",
+        {
+          "cameraPermission": "Pixobot needs your camera to capture photos and videos.",
+          "microphonePermission": "Pixobot needs your microphone to record video.",
+          "recordAudioAndroid": true
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
