@@ -6,7 +6,7 @@ import {
   useMicrophonePermissions,
 } from 'expo-camera';
 import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -14,7 +14,7 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import { useMediaStore } from '@/lib/store/media';
@@ -23,11 +23,18 @@ import { colors, fontSize, fontWeight, radius, spacing } from '@/tokens';
 // Note: Snapchat keeps camera in 'picture' mode by default and switches to 'video'
 // mode on long-press detection. We use a 250ms timer: short press → photo,
 // long press → mode switch then recordAsync. This matches the Snapchat interaction model.
+//
+// Note: expo-camera docs require waiting for onCameraReady before calling recordAsync.
+// When we switch mode prop from 'picture' to 'video', the native camera reinitializes
+// and onCameraReady fires again. We use pendingVideoRef so that onCameraReady callback
+// knows to start recording once the camera is ready in video mode.
+// A 600ms fallback timeout also covers devices where onCameraReady doesn't re-fire.
 
 const LONG_PRESS_MS = 250;
 
 export default function CameraScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [camPermission, requestCamPermission] = useCameraPermissions();
   const [micPermission, requestMicPermission] = useMicrophonePermissions();
 
@@ -35,12 +42,15 @@ export default function CameraScreen() {
   const [flash, setFlash] = useState<FlashMode>('off');
   const [cameraMode, setCameraMode] = useState<'picture' | 'video'>('picture');
   const [isRecording, setIsRecording] = useState(false);
-  const [cameraReady, setCameraReady] = useState(false);
 
   const cameraRef = useRef<CameraView>(null);
   const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingVideoRef = useRef(false); // true when mode switch triggered, waiting to record
-  const isRecordingRef = useRef(false);  // mirror of isRecording for use inside callbacks
+  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // pendingVideoRef: true while we're waiting for onCameraReady after switching to video mode
+  const pendingVideoRef = useRef(false);
+  // isRecordingRef: true while recordAsync is actually running (mirrors isRecording for callbacks)
+  const isRecordingRef = useRef(false);
 
   const setPending = useMediaStore((s) => s.setPending);
 
@@ -57,46 +67,60 @@ export default function CameraScreen() {
     );
   }
 
-  // Start video recording after mode has been switched to 'video'
-  useEffect(() => {
-    if (cameraMode === 'video' && pendingVideoRef.current && cameraReady) {
+  // Called by CameraView both on first mount AND after any mode switch.
+  // This is our signal that the camera is ready to record.
+  function handleCameraReady() {
+    if (pendingVideoRef.current && !isRecordingRef.current) {
       pendingVideoRef.current = false;
+      if (settleTimerRef.current) {
+        clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
+      }
       startRecording();
     }
-  }, [cameraMode, cameraReady]);
+  }
 
   async function startRecording() {
     if (!cameraRef.current || isRecordingRef.current) return;
     isRecordingRef.current = true;
-    setIsRecording(true);
     pulseShutter();
 
     try {
-      // Note: recordAsync resolves only when stopRecording() is called.
-      // The returned uri is then passed to the edit screen.
+      // Note: recordAsync resolves only when stopRecording() is called or maxDuration is reached.
       const result = await cameraRef.current.recordAsync({ maxDuration: 60 });
       if (result?.uri) {
         handleCapture(result.uri, 'video');
       }
-    } catch {
-      // Recording was cancelled or failed — reset silently
+    } catch (e) {
+      console.error('[camera] recordAsync failed:', e);
     } finally {
       isRecordingRef.current = false;
+      pendingVideoRef.current = false;
       setIsRecording(false);
       setCameraMode('picture');
     }
   }
 
   function stopRecording() {
-    if (cameraRef.current && isRecordingRef.current) {
+    if (isRecordingRef.current && cameraRef.current) {
+      // recordAsync is running — stop it normally
       cameraRef.current.stopRecording();
+    } else if (pendingVideoRef.current) {
+      // Released during the camera-ready settle window — cancel
+      pendingVideoRef.current = false;
+      if (settleTimerRef.current) {
+        clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
+      }
+      isRecordingRef.current = false;
+      setIsRecording(false);
+      setCameraMode('picture');
     }
   }
 
   async function takePhoto() {
-    if (!cameraRef.current || !cameraReady) return;
+    if (!cameraRef.current) return;
     pulseShutter();
-
     const result = await cameraRef.current.takePictureAsync({ quality: 0.9 });
     if (result?.uri) {
       handleCapture(result.uri, 'photo');
@@ -111,22 +135,35 @@ export default function CameraScreen() {
   function handlePressIn() {
     pressTimerRef.current = setTimeout(() => {
       pressTimerRef.current = null;
-      // Long press threshold reached — switch to video mode and record
+
+      // Show recording UI immediately — before the camera is actually ready — so the
+      // user gets instant feedback that a long-press was registered.
+      setIsRecording(true);
       pendingVideoRef.current = true;
       setCameraMode('video');
+
+      // Fallback: if onCameraReady doesn't re-fire after the mode switch (device-dependent),
+      // start recording after 600ms anyway.
+      settleTimerRef.current = setTimeout(() => {
+        settleTimerRef.current = null;
+        if (pendingVideoRef.current && !isRecordingRef.current) {
+          pendingVideoRef.current = false;
+          startRecording();
+        }
+      }, 600);
     }, LONG_PRESS_MS);
   }
 
   function handlePressOut() {
     if (pressTimerRef.current !== null) {
-      // Released before long-press threshold — it's a photo tap
+      // Released before long-press threshold → it's a photo tap
       clearTimeout(pressTimerRef.current);
       pressTimerRef.current = null;
-      if (!isRecordingRef.current) {
+      if (!isRecordingRef.current && !pendingVideoRef.current) {
         takePhoto();
       }
-    } else if (isRecordingRef.current) {
-      // Released after recording started — stop video
+    } else {
+      // Long-press path — stop recording or cancel the pending start
       stopRecording();
     }
   }
@@ -172,8 +209,6 @@ export default function CameraScreen() {
 
   // ─── Camera UI ───────────────────────────────────────────────────────────────
 
-  const flashIcon = flash === 'on' ? '⚡' : flash === 'auto' ? 'A' : '✕';
-
   return (
     <View style={styles.container}>
       <CameraView
@@ -182,30 +217,37 @@ export default function CameraScreen() {
         facing={facing}
         flash={flash}
         mode={cameraMode}
-        onCameraReady={() => setCameraReady(true)}
+        onCameraReady={handleCameraReady}
       />
 
       {/* ── Top controls ── */}
       <SafeAreaView edges={['top']} style={styles.topRow}>
-        {/* Flash toggle */}
         <Pressable style={styles.controlBtn} onPress={toggleFlash} hitSlop={8}>
           <FlashIcon mode={flash} />
         </Pressable>
-
-        {/* Flip camera */}
         <Pressable style={styles.controlBtn} onPress={flipCamera} hitSlop={8}>
           <FlipIcon />
         </Pressable>
       </SafeAreaView>
 
-      {/* ── Recording indicator ── */}
+      {/* ── Recording indicator — top right, below safe area ── */}
       {isRecording && (
-        <View style={styles.recordingDot} />
+        <View
+          style={[
+            styles.recordingDot,
+            { top: insets.top + 8, right: spacing.lg },
+          ]}
+        />
       )}
 
       {/* ── Shutter button ── */}
       <View style={styles.shutterRow}>
-        <Animated.View style={[styles.shutterOuter, isRecording && styles.shutterRecording, shutterStyle]}>
+        <Animated.View
+          style={[
+            styles.shutterOuter,
+            isRecording && styles.shutterRecording,
+            shutterStyle,
+          ]}>
           <Pressable
             style={styles.shutterInner}
             onPressIn={handlePressIn}
@@ -221,7 +263,6 @@ export default function CameraScreen() {
 // ─── SVG Icons ───────────────────────────────────────────────────────────────
 
 function FlashIcon({ mode }: { mode: FlashMode }) {
-  // Lightning bolt for on/auto, crossed bolt for off
   return (
     <Svg width={20} height={20} viewBox="0 0 20 20" fill="none">
       {mode !== 'off' ? (
@@ -241,7 +282,12 @@ function FlashIcon({ mode }: { mode: FlashMode }) {
             strokeLinecap="round"
             strokeLinejoin="round"
           />
-          <Path d="M3 3L17 17" stroke="rgba(255,255,255,0.45)" strokeWidth={1.5} strokeLinecap="round" />
+          <Path
+            d="M3 3L17 17"
+            stroke="rgba(255,255,255,0.45)"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+          />
         </>
       )}
     </Svg>
@@ -271,15 +317,11 @@ function FlipIcon() {
 
 function SmileyIcon() {
   // Note: The smiley is the app's one signature illustration element per PRD §11.6.
-  // Kept warm and simple — two dot eyes, gentle arc smile.
   return (
     <Svg width={38} height={38} viewBox="0 0 38 38" fill="none">
-      {/* Face outline */}
       <Circle cx="19" cy="19" r="16" stroke="white" strokeWidth={2} />
-      {/* Eyes */}
       <Circle cx="14" cy="16" r="2.2" fill="white" />
       <Circle cx="24" cy="16" r="2.2" fill="white" />
-      {/* Smile */}
       <Path
         d="M13 24 Q19 30 25 24"
         stroke="white"
@@ -305,7 +347,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Permissions screen
   permissionsContainer: {
     flex: 1,
     backgroundColor: colors.bg,
@@ -359,11 +400,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Recording dot indicator
+  // Recording indicator — positioned via inline style with safe area insets
   recordingDot: {
     position: 'absolute',
-    top: '50%',
-    alignSelf: 'center',
     width: 10,
     height: 10,
     borderRadius: 5,

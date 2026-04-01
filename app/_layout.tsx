@@ -34,6 +34,8 @@ export default function RootLayout() {
         {/* Edit screen sits above the tab navigator so it covers the full screen,
             and router.back() from it returns to camera — the user's confirmed preference. */}
         <Stack.Screen name="edit" options={{ animation: 'fade' }} />
+        {/* send-to sits above edit in the stack — back() returns to edit */}
+        <Stack.Screen name="send-to" options={{ animation: 'slide_from_bottom' }} />
       </Stack>
       <StatusBar style="dark" />
     </>

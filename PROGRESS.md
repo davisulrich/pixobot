@@ -2,46 +2,42 @@
 
 ## Done
 
-### Foundation
-- [x] Folder structure established (`app/(auth)`, `app/(app)`, `lib/`, `components/`)
-- [x] Dependencies installed: `@supabase/supabase-js`, `@react-native-async-storage/async-storage`, `expo-secure-store`, `zustand`, `nativewind`, `tailwindcss`, `react-native-svg`, `expo-camera`
-- [x] NativeWind v4 configured (`babel.config.js`, `metro.config.js`, `tailwind.config.js`, `global.css`)
-- [x] `tokens.ts` — full design system (colors, typography, spacing, radius, shadow)
+### Sprint 1 — Foundation + Camera
+- [x] Folder structure (`app/(auth)`, `app/(app)`, `lib/`, `components/`)
+- [x] Dependencies: supabase, zustand, nativewind, tailwindcss, react-native-svg, expo-camera
+- [x] NativeWind v4 configured (babel, metro, tailwind, global.css)
+- [x] `tokens.ts` — full design system (colors, type scale, spacing, radius, shadow)
 - [x] `lib/supabase.ts` — Supabase client with AsyncStorage session persistence
-- [x] `lib/store/auth.ts` — Zustand auth store with session bootstrap + listener
-- [x] `app/_layout.tsx` — root layout with auth gate + `/edit` screen in root Stack
-- [x] `app/(auth)/login.tsx` — login screen (username + password)
-- [x] `app/(auth)/signup.tsx` — signup screen with username validation
-- [x] `app/(app)/_layout.tsx` — floating pill tab bar (Chat, Camera, Profile), hidden on camera tab
-- [x] Placeholder screens for all routes: chat, chat/[id], friends, profile, memories, settings
+- [x] `lib/store/auth.ts` — Zustand auth store, bootstrapped at module load
+- [x] `lib/store/media.ts` — Zustand store for pending captured media
+- [x] `app/index.tsx` — loading state + auth-aware redirect
+- [x] `app/_layout.tsx` — root Stack with auth gate
+- [x] `app/(auth)/login.tsx` + `signup.tsx` — username+password auth
+- [x] `app/(app)/_layout.tsx` — floating pill tab bar, hidden on camera
+- [x] `app/(app)/camera.tsx` — full-bleed viewfinder, flash, flip, tap=photo/hold=video, smiley shutter, Reanimated pulse
+- [x] Placeholder screens: chat, chat/[id], friends, profile, memories, settings
 
-### Camera Screen
-- [x] `expo-camera` installed + `app.json` plugin configured (camera + microphone permissions)
-- [x] `lib/store/media.ts` — Zustand store for pending captured media (URI + type)
-- [x] `app/(app)/camera/index.tsx` — full implementation:
-  - Full-bleed `CameraView`, edge-to-edge
-  - Camera + microphone permissions gate with friendly request UI
-  - Flash toggle (off → on → auto) — top-left, 40px semi-transparent circle
-  - Camera flip (front ↔ back) — top-right, 40px semi-transparent circle
-  - Shutter button — 72px yellow, SVG smiley face icon, centered at bottom 48px
-  - Tap = photo (`takePictureAsync`), hold 250ms = video (`recordAsync` + `stopRecording`)
-  - Scale pulse on capture (0.92 → 1.0, 120ms via Reanimated)
-  - Red border + dot indicator while recording
-  - After capture: stores URI in media store, pushes `/edit`
-- [x] `app/edit.tsx` — placeholder (dismiss → back to camera, per confirmed UX)
+### Sprint 2 — Edit + Send Flow
+- [x] `expo-video` installed for video preview
+- [x] `app/edit.tsx` — full-bleed photo/video preview, SVG draw canvas (black/white brush), draggable + pinch-resizable text boxes, vertical toolbar pill, disappear indicator, send button (→ /send-to)
+- [x] `app/send-to.tsx` — friend list from Supabase, recents horizontal row, multi-select (yellow ring/tint), search bar, upload to Storage, find/create conversation, insert message, land on chat
+- [x] `supabase/schema.sql` — all 5 tables (users, friendships, conversations, messages, memories) with RLS policies + storage bucket instructions
+- [x] `send-to` registered in root Stack (slide from bottom animation)
 
 ## Up Next
 
-- [ ] **Edit + Send screen** — full-bleed preview, drawing tool, text overlay, send button, friend selector
-- [ ] **Conversations list** — unread indicators, conversation rows
-- [ ] **Friends screen** — username search, invite link, friend requests
+- [ ] **Supabase setup** — run `supabase/schema.sql` in your project's SQL editor; create `messages` storage bucket (public read)
+- [ ] **Conversations list** (`app/(app)/chat/index.tsx`) — unread indicators, conversation rows, real-time updates
+- [ ] **Message thread viewer** (`app/(app)/chat/[id].tsx`) — tap to dismiss, replay counter (max 3), heart to save → Memories + iOS Photos
+- [ ] **Friends screen** — username search, send/accept friend requests, invite link
 - [ ] **Profile screen** — display name, settings rows, memories link
-- [ ] **Memories Album** — grid of hearted messages
+- [ ] **Memories Album** — 3-column grid of hearted media, full-screen viewer
 - [ ] **Settings** — username change, password change, log out, delete account
-- [ ] **Push notifications** — 3 triggers
+- [ ] **Push notifications** — 3 triggers (message received, friend request, accepted)
 - [ ] App Store submission
 
 ## Open Decisions
 
-- Resolved: dismiss from Edit → back to camera ✓
-- Supabase project credentials → add to `.env.local` (see `.env.example`)
+- All resolved ✓
+- Supabase credentials → `.env.local` (see `.env.example`)
+- Storage bucket: name `messages`, public read — create in Supabase dashboard
