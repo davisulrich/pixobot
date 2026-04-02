@@ -20,15 +20,11 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { useMediaStore } from '@/lib/store/media';
 import { colors, fontSize, fontWeight, radius, spacing } from '@/tokens';
 
-// Note: Snapchat keeps camera in 'picture' mode by default and switches to 'video'
-// mode on long-press detection. We use a 250ms timer: short press → photo,
-// long press → mode switch then recordAsync. This matches the Snapchat interaction model.
-//
-// Note: expo-camera docs require waiting for onCameraReady before calling recordAsync.
-// When we switch mode prop from 'picture' to 'video', the native camera reinitializes
-// and onCameraReady fires again. We use pendingVideoRef so that onCameraReady callback
-// knows to start recording once the camera is ready in video mode.
-// A 600ms fallback timeout also covers devices where onCameraReady doesn't re-fire.
+// Note: Snapchat keeps the camera in 'picture' mode and switches on long-press.
+// We keep mode="video" always instead — expo-camera v17 supports takePictureAsync
+// and recordAsync regardless of mode; the mode prop only affects session optimization.
+// This eliminates all mode-switch timing issues (the native session never has to
+// reconfigure, so recordAsync is always ready when the user holds the button).
 
 const LONG_PRESS_MS = 250;
 
@@ -40,17 +36,12 @@ export default function CameraScreen() {
 
   const [facing, setFacing] = useState<CameraType>('back');
   const [flash, setFlash] = useState<FlashMode>('off');
-  const [cameraMode, setCameraMode] = useState<'picture' | 'video'>('picture');
   const [isRecording, setIsRecording] = useState(false);
 
   const cameraRef = useRef<CameraView>(null);
   const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // pendingVideoRef: true while we're waiting for onCameraReady after switching to video mode
-  const pendingVideoRef = useRef(false);
-  // isRecordingRef: true while recordAsync is actually running (mirrors isRecording for callbacks)
-  const isRecordingRef = useRef(false);
+  const isRecordingRef = useRef(false); // mirrors isRecording for use inside callbacks
+  const cameraReadyRef = useRef(false); // true after the first onCameraReady fires
 
   const setPending = useMediaStore((s) => s.setPending);
 
@@ -67,22 +58,17 @@ export default function CameraScreen() {
     );
   }
 
-  // Called by CameraView both on first mount AND after any mode switch.
-  // This is our signal that the camera is ready to record.
   function handleCameraReady() {
-    if (pendingVideoRef.current && !isRecordingRef.current) {
-      pendingVideoRef.current = false;
-      if (settleTimerRef.current) {
-        clearTimeout(settleTimerRef.current);
-        settleTimerRef.current = null;
-      }
-      startRecording();
-    }
+    cameraReadyRef.current = true;
   }
 
+  // ── Video recording ───────────────────────────────────────────────────────────
+
   async function startRecording() {
-    if (!cameraRef.current || isRecordingRef.current) return;
+    if (!cameraRef.current || !cameraReadyRef.current || isRecordingRef.current) return;
+
     isRecordingRef.current = true;
+    setIsRecording(true);
     pulseShutter();
 
     try {
@@ -92,34 +78,25 @@ export default function CameraScreen() {
         handleCapture(result.uri, 'video');
       }
     } catch (e) {
+      // Note: iOS Simulator cannot record video — this is an Apple hardware limitation.
+      // Test on a physical device. On device the error here would be a genuine failure.
       console.error('[camera] recordAsync failed:', e);
     } finally {
       isRecordingRef.current = false;
-      pendingVideoRef.current = false;
       setIsRecording(false);
-      setCameraMode('picture');
     }
   }
 
   function stopRecording() {
-    if (isRecordingRef.current && cameraRef.current) {
-      // recordAsync is running — stop it normally
+    if (cameraRef.current && isRecordingRef.current) {
       cameraRef.current.stopRecording();
-    } else if (pendingVideoRef.current) {
-      // Released during the camera-ready settle window — cancel
-      pendingVideoRef.current = false;
-      if (settleTimerRef.current) {
-        clearTimeout(settleTimerRef.current);
-        settleTimerRef.current = null;
-      }
-      isRecordingRef.current = false;
-      setIsRecording(false);
-      setCameraMode('picture');
     }
   }
 
+  // ── Photo capture ─────────────────────────────────────────────────────────────
+
   async function takePhoto() {
-    if (!cameraRef.current) return;
+    if (!cameraRef.current || !cameraReadyRef.current) return;
     pulseShutter();
     const result = await cameraRef.current.takePictureAsync({ quality: 0.9 });
     if (result?.uri) {
@@ -132,38 +109,29 @@ export default function CameraScreen() {
     router.push('/edit');
   }
 
+  // ── Press handling ────────────────────────────────────────────────────────────
+
   function handlePressIn() {
     pressTimerRef.current = setTimeout(() => {
       pressTimerRef.current = null;
-
-      // Show recording UI immediately — before the camera is actually ready — so the
-      // user gets instant feedback that a long-press was registered.
+      // Long press — show recording UI immediately, then start recording.
+      // Because mode="video" is set permanently, the session is already configured
+      // and recordAsync can be called right away.
       setIsRecording(true);
-      pendingVideoRef.current = true;
-      setCameraMode('video');
-
-      // Fallback: if onCameraReady doesn't re-fire after the mode switch (device-dependent),
-      // start recording after 600ms anyway.
-      settleTimerRef.current = setTimeout(() => {
-        settleTimerRef.current = null;
-        if (pendingVideoRef.current && !isRecordingRef.current) {
-          pendingVideoRef.current = false;
-          startRecording();
-        }
-      }, 600);
+      startRecording();
     }, LONG_PRESS_MS);
   }
 
   function handlePressOut() {
     if (pressTimerRef.current !== null) {
-      // Released before long-press threshold → it's a photo tap
+      // Released before the long-press threshold → photo tap
       clearTimeout(pressTimerRef.current);
       pressTimerRef.current = null;
-      if (!isRecordingRef.current && !pendingVideoRef.current) {
+      if (!isRecordingRef.current) {
         takePhoto();
       }
-    } else {
-      // Long-press path — stop recording or cancel the pending start
+    } else if (isRecordingRef.current) {
+      // Released after recording started → stop
       stopRecording();
     }
   }
@@ -211,12 +179,13 @@ export default function CameraScreen() {
 
   return (
     <View style={styles.container}>
+      {/* mode="video" stays constant — no switching, no timing issues */}
       <CameraView
         ref={cameraRef}
         style={StyleSheet.absoluteFill}
         facing={facing}
         flash={flash}
-        mode={cameraMode}
+        mode="video"
         onCameraReady={handleCameraReady}
       />
 
@@ -400,7 +369,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Recording indicator — positioned via inline style with safe area insets
+  // Recording indicator — top right, positioned via inline style with safe area insets
   recordingDot: {
     position: 'absolute',
     width: 10,
