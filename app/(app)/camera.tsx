@@ -7,8 +7,22 @@ import {
 } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Dimensions,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import {
+  Directions,
+  Gesture,
+  GestureDetector,
+  GestureHandlerRootView,
+} from 'react-native-gesture-handler';
 import Animated, {
+  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSequence,
@@ -20,13 +34,16 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { useMediaStore } from '@/lib/store/media';
 import { colors, fontSize, fontWeight, radius, spacing } from '@/tokens';
 
-// Note: Snapchat keeps the camera in 'picture' mode and switches on long-press.
-// We keep mode="video" always instead — expo-camera v17 supports takePictureAsync
-// and recordAsync regardless of mode; the mode prop only affects session optimization.
-// This eliminates all mode-switch timing issues (the native session never has to
-// reconfigure, so recordAsync is always ready when the user holds the button).
+// Note: Camera stays in mode="video" always — expo-camera v17 supports takePictureAsync
+// and recordAsync regardless of mode; this eliminates session-reconfiguration timing issues.
+//
+// Gestures on the camera screen:
+//   • Swipe left  → Conversations (chat tab)
+//   • Swipe right → Profile tab
+//   • Double-tap  → Flip camera (scoped to top portion only, away from shutter button)
 
 const LONG_PRESS_MS = 250;
+const { height: SCREEN_H } = Dimensions.get('window');
 
 export default function CameraScreen() {
   const router = useRouter();
@@ -40,8 +57,8 @@ export default function CameraScreen() {
 
   const cameraRef = useRef<CameraView>(null);
   const pressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isRecordingRef = useRef(false); // mirrors isRecording for use inside callbacks
-  const cameraReadyRef = useRef(false); // true after the first onCameraReady fires
+  const isRecordingRef = useRef(false);
+  const cameraReadyRef = useRef(false);
 
   const setPending = useMediaStore((s) => s.setPending);
 
@@ -62,6 +79,46 @@ export default function CameraScreen() {
     cameraReadyRef.current = true;
   }
 
+  // ── Navigation helpers (called via runOnJS from worklet gestures) ────────────
+
+  function goToChat() {
+    router.navigate('/(app)/chat');
+  }
+
+  function goToProfile() {
+    router.navigate('/(app)/profile');
+  }
+
+  function flipCamera() {
+    setFacing((f) => (f === 'back' ? 'front' : 'back'));
+  }
+
+  // ── Gestures ─────────────────────────────────────────────────────────────────
+
+  // Double-tap to flip camera — scoped to the top portion of the screen so it
+  // never fires over the shutter button area (bottom ~160px).
+  const doubleTap = Gesture.Tap()
+    .numberOfTaps(2)
+    .onEnd((e) => {
+      if (e.y < SCREEN_H - 160) {
+        runOnJS(flipCamera)();
+      }
+    });
+
+  // Fling left → chat, right → profile. Flings are fast directional swipes and
+  // won't conflict with the shutter button's press-and-hold interaction.
+  const flingLeft = Gesture.Fling()
+    .direction(Directions.LEFT)
+    .onEnd(() => runOnJS(goToProfile)());
+
+  const flingRight = Gesture.Fling()
+    .direction(Directions.RIGHT)
+    .onEnd(() => runOnJS(goToChat)());
+
+  // Race: the first gesture to recognize wins — flings and double-tap are
+  // distinct enough in shape that they won't accidentally cancel each other.
+  const cameraGestures = Gesture.Race(flingLeft, flingRight, doubleTap);
+
   // ── Video recording ───────────────────────────────────────────────────────────
 
   async function startRecording() {
@@ -72,14 +129,12 @@ export default function CameraScreen() {
     pulseShutter();
 
     try {
-      // Note: recordAsync resolves only when stopRecording() is called or maxDuration is reached.
       const result = await cameraRef.current.recordAsync({ maxDuration: 60 });
       if (result?.uri) {
         handleCapture(result.uri, 'video');
       }
     } catch (e) {
-      // Note: iOS Simulator cannot record video — this is an Apple hardware limitation.
-      // Test on a physical device. On device the error here would be a genuine failure.
+      // Note: iOS Simulator cannot record video — test on a physical device.
       console.error('[camera] recordAsync failed:', e);
     } finally {
       isRecordingRef.current = false;
@@ -114,9 +169,6 @@ export default function CameraScreen() {
   function handlePressIn() {
     pressTimerRef.current = setTimeout(() => {
       pressTimerRef.current = null;
-      // Long press — show recording UI immediately, then start recording.
-      // Because mode="video" is set permanently, the session is already configured
-      // and recordAsync can be called right away.
       setIsRecording(true);
       startRecording();
     }, LONG_PRESS_MS);
@@ -124,24 +176,18 @@ export default function CameraScreen() {
 
   function handlePressOut() {
     if (pressTimerRef.current !== null) {
-      // Released before the long-press threshold → photo tap
       clearTimeout(pressTimerRef.current);
       pressTimerRef.current = null;
       if (!isRecordingRef.current) {
         takePhoto();
       }
     } else if (isRecordingRef.current) {
-      // Released after recording started → stop
       stopRecording();
     }
   }
 
   function toggleFlash() {
     setFlash((f) => (f === 'off' ? 'on' : f === 'on' ? 'auto' : 'off'));
-  }
-
-  function flipCamera() {
-    setFacing((f) => (f === 'back' ? 'front' : 'back'));
   }
 
   // ─── Permissions ─────────────────────────────────────────────────────────────
@@ -178,54 +224,69 @@ export default function CameraScreen() {
   // ─── Camera UI ───────────────────────────────────────────────────────────────
 
   return (
-    <View style={styles.container}>
-      {/* mode="video" stays constant — no switching, no timing issues */}
-      <CameraView
-        ref={cameraRef}
-        style={StyleSheet.absoluteFill}
-        facing={facing}
-        flash={flash}
-        mode="video"
-        onCameraReady={handleCameraReady}
-      />
+    <GestureHandlerRootView style={styles.container}>
+      <GestureDetector gesture={cameraGestures}>
+        <View style={styles.container}>
+          {/* mode="video" stays constant — no switching, no timing issues */}
+          <CameraView
+            ref={cameraRef}
+            style={StyleSheet.absoluteFill}
+            facing={facing}
+            flash={flash}
+            mode="video"
+            onCameraReady={handleCameraReady}
+          />
 
-      {/* ── Top controls ── */}
-      <SafeAreaView edges={['top']} style={styles.topRow}>
-        <Pressable style={styles.controlBtn} onPress={toggleFlash} hitSlop={8}>
-          <FlashIcon mode={flash} />
-        </Pressable>
-        <Pressable style={styles.controlBtn} onPress={flipCamera} hitSlop={8}>
-          <FlipIcon />
-        </Pressable>
-      </SafeAreaView>
+          {/* ── Top controls ── */}
+          <SafeAreaView edges={['top']} style={styles.topRow}>
+            <Pressable style={styles.controlBtn} onPress={toggleFlash} hitSlop={8}>
+              <FlashIcon mode={flash} />
+            </Pressable>
+            <Pressable style={styles.controlBtn} onPress={flipCamera} hitSlop={8}>
+              <FlipIcon />
+            </Pressable>
+          </SafeAreaView>
 
-      {/* ── Recording indicator — top right, below safe area ── */}
-      {isRecording && (
-        <View
-          style={[
-            styles.recordingDot,
-            { top: insets.top + 8, right: spacing.lg },
-          ]}
-        />
-      )}
+          {/* ── Recording indicator — top right, below safe area ── */}
+          {isRecording && (
+            <View
+              style={[
+                styles.recordingDot,
+                { top: insets.top + 8, right: spacing.lg },
+              ]}
+            />
+          )}
 
-      {/* ── Shutter button ── */}
-      <View style={styles.shutterRow}>
-        <Animated.View
-          style={[
-            styles.shutterOuter,
-            isRecording && styles.shutterRecording,
-            shutterStyle,
-          ]}>
-          <Pressable
-            style={styles.shutterInner}
-            onPressIn={handlePressIn}
-            onPressOut={handlePressOut}>
-            <SmileyIcon />
-          </Pressable>
-        </Animated.View>
-      </View>
-    </View>
+          {/* ── Bottom row: chat ← shutter → profile ── */}
+          <View style={styles.shutterRow}>
+            {/* Left: chat / conversations */}
+            <Pressable style={styles.navBtn} onPress={goToChat} hitSlop={8}>
+              <ChatNavIcon />
+            </Pressable>
+
+            {/* Center: shutter (tap = photo, hold = video) */}
+            <Animated.View
+              style={[
+                styles.shutterOuter,
+                isRecording && styles.shutterRecording,
+                shutterStyle,
+              ]}>
+              <Pressable
+                style={styles.shutterInner}
+                onPressIn={handlePressIn}
+                onPressOut={handlePressOut}>
+                <SmileyIcon />
+              </Pressable>
+            </Animated.View>
+
+            {/* Right: profile */}
+            <Pressable style={styles.navBtn} onPress={goToProfile} hitSlop={8}>
+              <ProfileNavIcon />
+            </Pressable>
+          </View>
+        </View>
+      </GestureDetector>
+    </GestureHandlerRootView>
   );
 }
 
@@ -279,6 +340,36 @@ function FlipIcon() {
         strokeWidth={1.5}
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+// Same paths as TabBarIcon — ensures visual consistency between camera shortcuts
+// and the floating tab bar they navigate to.
+function ChatNavIcon() {
+  return (
+    <Svg width={22} height={22} viewBox="0 0 22 22" fill="none">
+      <Path
+        d="M4 4h14a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H7l-4 4V5a1 1 0 0 1 1-1z"
+        stroke="white"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+function ProfileNavIcon() {
+  return (
+    <Svg width={22} height={22} viewBox="0 0 22 22" fill="none">
+      <Circle cx={11} cy={8} r={3.5} stroke="white" strokeWidth={1.5} />
+      <Path
+        d="M4 19c0-3.866 3.134-7 7-7h0c3.866 0 7 3.134 7 7"
+        stroke="white"
+        strokeWidth={1.5}
+        strokeLinecap="round"
       />
     </Svg>
   );
@@ -378,14 +469,29 @@ const styles = StyleSheet.create({
     backgroundColor: '#E53935',
   },
 
-  // Shutter — PRD: 72px, yellow #F5C842, centered at bottom
+  // Bottom row: chat ← shutter → profile
   shutterRow: {
     position: 'absolute',
     bottom: 48,
     left: 0,
     right: 0,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 44,
   },
+
+  // Navigation buttons flanking the shutter — same visual style as top controls
+  navBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Shutter — PRD: 72px, yellow #F5C842, centered
   shutterOuter: {
     width: 72,
     height: 72,
