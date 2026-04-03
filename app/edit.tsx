@@ -23,11 +23,11 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useMediaStore } from '@/lib/store/media';
-import { colors, fontSize, radius, spacing } from '@/tokens';
+import { colors, radius, spacing } from '@/tokens';
 
 // Note: Snapchat's edit screen is a layered compositor:
 //   1. Full-bleed media (photo or looping video)
@@ -37,15 +37,34 @@ import { colors, fontSize, radius, spacing } from '@/tokens';
 // We follow the same layering order so gestures fall through correctly.
 
 // Note: Drawing paths must never read a JS ref (useRef) from inside a Reanimated
-// worklet — doing so causes a native crash ("unexpectedData ...PatternFunction").
-// Instead we use a Reanimated shared value (useSharedValue) to accumulate the SVG
-// path string on the UI thread, and only pass primitives to runOnJS callbacks.
+// worklet — doing so causes a native crash. We use useSharedValue for the live
+// path string (UI thread safe) and pass only primitives via runOnJS.
+
+// Note: Eraser hit-testing samples each completed path's point list against the
+// current finger position. Because onUpdate fires at ~60fps this catches every
+// stroke the eraser crosses in practice, without any polygon intersection math.
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
+// Radius of the eraser circle in pixels — also used for hit-testing.
+const ERASE_RADIUS = 22;
+
 type DrawPath = { d: string; color: string };
 type TextBox = { id: string; text: string; x: number; y: number; scale: number };
-type ActiveMode = 'none' | 'draw' | 'text';
+type ActiveMode = 'none' | 'draw' | 'erase' | 'text';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Parse sampled (x, y) points from an SVG path string of M/L commands.
+function parsePathPoints(d: string): { x: number; y: number }[] {
+  const pts: { x: number; y: number }[] = [];
+  const re = /[ML]\s*([\d.]+),([\d.]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(d)) !== null) {
+    pts.push({ x: parseFloat(m[1]), y: parseFloat(m[2]) });
+  }
+  return pts;
+}
 
 // ─── Draggable text box ───────────────────────────────────────────────────────
 
@@ -108,10 +127,7 @@ function DraggableTextBox({
           value={box.text}
           onChangeText={(t) => onChangeText(box.id, t)}
           onBlur={() => {
-            // Delete the box if the user dismissed without typing anything
-            if (!box.text.trim()) {
-              onDelete(box.id);
-            }
+            if (!box.text.trim()) onDelete(box.id);
           }}
           multiline
           placeholder="Type something…"
@@ -136,13 +152,10 @@ export default function EditScreen() {
   const [completedPaths, setCompletedPaths] = useState<DrawPath[]>([]);
   const [currentPathD, setCurrentPathD] = useState('');
   const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
+  const [eraserPos, setEraserPos] = useState<{ x: number; y: number } | null>(null);
 
-  // Note: currentPathShared lives on the UI thread so it's safe to read/write
-  // from inside Reanimated worklets without any runOnJS bridge.
   const currentPathShared = useSharedValue('');
 
-  // Note: expo-video requires a player instance even when showing a photo.
-  // We pass null source for photos so the player stays inert.
   const videoPlayer = useVideoPlayer(
     pendingType === 'video' && pendingUri ? pendingUri : null,
     (player) => {
@@ -163,13 +176,10 @@ export default function EditScreen() {
 
   // ── Drawing ────────────────────────────────────────────────────────────────
 
-  // Called via runOnJS — receives the live path string as a primitive from the
-  // UI thread so React state stays in sync for the in-progress stroke.
   function syncCurrentPath(d: string) {
     setCurrentPathD(d);
   }
 
-  // Called via runOnJS at stroke end — receives the completed path as a primitive.
   function commitPath(d: string, color: string) {
     if (d) {
       setCompletedPaths((prev) => [...prev, { d, color }]);
@@ -177,28 +187,57 @@ export default function EditScreen() {
     setCurrentPathD('');
   }
 
-  // drawColor is captured at gesture-creation time; re-create gesture when it changes
-  // so committed paths get the current color. (drawColor changes are infrequent.)
   const drawPan = Gesture.Pan()
     .minDistance(0)
     .onStart((e) => {
-      // Safe: writing to a shared value from a worklet is always allowed
       currentPathShared.value = `M ${e.x.toFixed(1)},${e.y.toFixed(1)}`;
       runOnJS(syncCurrentPath)(currentPathShared.value);
     })
     .onUpdate((e) => {
-      // Safe: reading currentPathShared.value (a shared value) in a worklet is fine
       currentPathShared.value =
         currentPathShared.value + ` L ${e.x.toFixed(1)},${e.y.toFixed(1)}`;
       runOnJS(syncCurrentPath)(currentPathShared.value);
     })
     .onEnd(() => {
-      // Pass finished path string + color as primitives — no JS ref reads in worklet
       runOnJS(commitPath)(currentPathShared.value, drawColor);
       currentPathShared.value = '';
     });
 
-  // ── Text tap (creates a new box at tap location) ──────────────────────────
+  // ── Eraser ────────────────────────────────────────────────────────────────
+  // For each finger position update, remove any completed path that has at least
+  // one sampled point within ERASE_RADIUS pixels. Running at ~60fps this reliably
+  // catches every stroke the eraser crosses without polygon intersection math.
+
+  function eraseAtPoint(x: number, y: number) {
+    setEraserPos({ x, y });
+    setCompletedPaths((prev) =>
+      prev.filter((p) => {
+        const pts = parsePathPoints(p.d);
+        // Keep the path only if NO point is within the eraser circle
+        return !pts.some(
+          (pt) => (pt.x - x) * (pt.x - x) + (pt.y - y) * (pt.y - y) < ERASE_RADIUS * ERASE_RADIUS,
+        );
+      }),
+    );
+  }
+
+  function clearEraserPos() {
+    setEraserPos(null);
+  }
+
+  const erasePan = Gesture.Pan()
+    .minDistance(0)
+    .onStart((e) => {
+      runOnJS(eraseAtPoint)(e.x, e.y);
+    })
+    .onUpdate((e) => {
+      runOnJS(eraseAtPoint)(e.x, e.y);
+    })
+    .onEnd(() => {
+      runOnJS(clearEraserPos)();
+    });
+
+  // ── Text ──────────────────────────────────────────────────────────────────
 
   function addTextBox(x: number, y: number) {
     const id = Date.now().toString();
@@ -244,10 +283,15 @@ export default function EditScreen() {
 
   if (!pendingUri) return null;
 
-  const canvasGesture = activeMode === 'draw' ? drawPan : textTap;
-  // Canvas only captures touches when a tool is active
-  const canvasPointerEvents: 'none' | 'auto' =
-    activeMode === 'none' ? 'none' : 'auto';
+  const canvasGesture =
+    activeMode === 'draw' ? drawPan :
+    activeMode === 'erase' ? erasePan :
+    textTap;
+
+  const canvasPointerEvents: 'none' | 'auto' = activeMode === 'none' ? 'none' : 'auto';
+
+  // Eraser button only appears once there's something to erase
+  const showEraser = completedPaths.length > 0;
 
   return (
     <GestureHandlerRootView style={styles.root}>
@@ -277,6 +321,7 @@ export default function EditScreen() {
             style={[StyleSheet.absoluteFill, { pointerEvents: canvasPointerEvents }]}
             collapsable={false}>
             <Svg style={StyleSheet.absoluteFill}>
+              {/* Completed strokes */}
               {completedPaths.map((p, i) => (
                 <Path
                   key={i}
@@ -288,6 +333,7 @@ export default function EditScreen() {
                   fill="none"
                 />
               ))}
+              {/* Live stroke being drawn */}
               {currentPathD ? (
                 <Path
                   d={currentPathD}
@@ -298,6 +344,17 @@ export default function EditScreen() {
                   fill="none"
                 />
               ) : null}
+              {/* Eraser cursor — shows hit radius so the user knows what will be removed */}
+              {activeMode === 'erase' && eraserPos && (
+                <Circle
+                  cx={eraserPos.x}
+                  cy={eraserPos.y}
+                  r={ERASE_RADIUS}
+                  stroke="rgba(255,255,255,0.75)"
+                  strokeWidth={2}
+                  fill="rgba(255,255,255,0.15)"
+                />
+              )}
             </Svg>
           </View>
         </GestureDetector>
@@ -324,7 +381,7 @@ export default function EditScreen() {
             </Pressable>
 
             <View style={styles.toolbarArea} pointerEvents="box-none">
-              {/* Color picker — draw mode only, PRD §11.5 */}
+              {/* Color picker — draw mode only */}
               {activeMode === 'draw' && (
                 <Pressable
                   style={styles.colorPicker}
@@ -349,8 +406,9 @@ export default function EditScreen() {
                 </Pressable>
               )}
 
-              {/* Vertical toolbar pill — Text + Draw */}
+              {/* Vertical toolbar pill */}
               <View style={styles.toolbarPill}>
+                {/* Text tool */}
                 <Pressable
                   style={[styles.toolBtn, activeMode === 'text' && styles.toolBtnActive]}
                   onPress={() => activateMode('text')}
@@ -360,23 +418,32 @@ export default function EditScreen() {
 
                 <View style={styles.toolDivider} />
 
+                {/* Draw tool */}
                 <Pressable
                   style={[styles.toolBtn, activeMode === 'draw' && styles.toolBtnActive]}
                   onPress={() => activateMode('draw')}
                   hitSlop={4}>
                   <PenIcon active={activeMode === 'draw'} />
                 </Pressable>
+
+                {/* Eraser tool — only visible when there are paths to erase */}
+                {showEraser && (
+                  <>
+                    <View style={styles.toolDivider} />
+                    <Pressable
+                      style={[styles.toolBtn, activeMode === 'erase' && styles.toolBtnActive]}
+                      onPress={() => activateMode('erase')}
+                      hitSlop={4}>
+                      <EraserIcon active={activeMode === 'erase'} />
+                    </Pressable>
+                  </>
+                )}
               </View>
             </View>
           </View>
 
-          {/* Bottom row: disappear indicator left, send button right */}
+          {/* Bottom row: send button */}
           <View style={styles.bottomRow} pointerEvents="box-none">
-            {/* Informational pill — tells the sender how the recipient will see it (PRD §9.3) */}
-            <View style={styles.disappearPill}>
-              <Text style={styles.disappearText}>👆  Disappears on tap</Text>
-            </View>
-
             <Pressable
               style={styles.sendBtn}
               onPress={() => router.push('/send-to')}
@@ -402,6 +469,29 @@ function PenIcon({ active }: { active: boolean }) {
         strokeWidth={1.5}
         strokeLinecap="round"
         strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+function EraserIcon({ active }: { active: boolean }) {
+  const c = active ? colors.accent : 'white';
+  return (
+    <Svg width={18} height={18} viewBox="0 0 18 18" fill="none">
+      {/* Eraser body */}
+      <Path
+        d="M3 13.5L8 4l7 4-5 9.5-3-1.5"
+        stroke={c}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* Baseline */}
+      <Path
+        d="M3 13.5h12"
+        stroke={c}
+        strokeWidth={1.5}
+        strokeLinecap="round"
       />
     </Svg>
   );
@@ -445,7 +535,6 @@ const styles = StyleSheet.create({
 
   toolbarArea: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 
-  // PRD §11.5: two stacked circles — black on top, white below
   colorPicker: { gap: 6, alignItems: 'center' },
   colorCircle: {
     width: 26,
@@ -456,7 +545,6 @@ const styles = StyleSheet.create({
   },
   colorCircleActive: { borderWidth: 2 },
 
-  // Vertical toolbar pill
   toolbarPill: {
     backgroundColor: 'rgba(0,0,0,0.55)',
     borderRadius: radius.card,
@@ -487,20 +575,11 @@ const styles = StyleSheet.create({
     right: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.screen,
   },
 
-  disappearPill: {
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: radius.button,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  disappearText: { color: '#fff', fontSize: fontSize.caption },
-
-  // PRD §11.5: 64px yellow circle, dark arrow icon
   sendBtn: {
     width: 64,
     height: 64,
