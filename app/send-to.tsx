@@ -1,3 +1,4 @@
+import * as FileSystem from 'expo-file-system/legacy';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -104,12 +105,18 @@ export default function SendToScreen() {
       const ext = pendingType === 'video' ? 'mp4' : 'jpg';
       const storagePath = `${user.id}/${Date.now()}.${ext}`;
 
-      const response = await fetch(pendingUri);
-      const blob = await response.blob();
+      const base64 = await FileSystem.readAsStringAsync(pendingUri, {
+        encoding: 'base64',
+      });
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
 
       const { data: uploadData, error: uploadError } = await supabase.storage
         .from('messages')
-        .upload(storagePath, blob, {
+        .upload(storagePath, bytes, {
           contentType: pendingType === 'video' ? 'video/mp4' : 'image/jpeg',
           upsert: false,
         });

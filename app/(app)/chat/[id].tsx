@@ -1,4 +1,5 @@
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
+import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -6,7 +7,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  Image,
   Modal,
   Pressable,
   StyleSheet,
@@ -78,13 +78,16 @@ function SnapViewer({
     },
   );
 
+  console.log('[SnapViewer] mediaUrl:', message.mediaUrl, 'mediaType:', message.mediaType);
+
   return (
     <Pressable style={styles.viewer} onPress={onDismiss}>
       {message.mediaType === 'photo' ? (
         <Image
           source={{ uri: message.mediaUrl }}
           style={StyleSheet.absoluteFill}
-          resizeMode="cover"
+          contentFit="cover"
+          onError={(e) => console.error('[SnapViewer] image load error:', e)}
         />
       ) : (
         <VideoView

@@ -112,7 +112,7 @@ export default function ChatListScreen() {
     // Refresh the list whenever any conversation or message changes.
     // Granular diffing isn't needed — the list is small and loads fast.
     const channel = supabase
-      .channel('chat-list')
+      .channel(`chat-list-${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, load)
       .subscribe();
