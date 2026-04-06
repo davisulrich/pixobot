@@ -122,8 +122,8 @@ export default function ChatListScreen() {
 
   function getStatus(conv: ConvRow): { label: string; unread: boolean } {
     const msg = conv.latestMessage;
-    if (!msg) return { label: 'No snaps yet', unread: false };
-    const iSent = msg.senderId === user!.id;
+    if (!msg || !user) return { label: 'No snaps yet', unread: false };
+    const iSent = msg.senderId === user.id;
     const kind = msg.mediaType === 'photo' ? 'Photo' : 'Video';
     if (iSent) {
       return { label: msg.openedAt ? `${kind} opened` : `${kind} delivered`, unread: false };

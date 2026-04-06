@@ -18,9 +18,13 @@ function FloatingTabBar({ state, descriptors, navigation }: any) {
   return (
     <View style={[styles.wrapper, { paddingBottom: insets.bottom + spacing.sm }]}>
       <View style={styles.pill}>
-        {state.routes.map((route: any, index: number) => {
+        {state.routes.filter((route: any) =>
+          // Exclude hidden routes (e.g. friends) — href: null keeps them in
+          // state.routes for custom tab bars, but they have no tabBarIcon.
+          !!descriptors[route.key].options.tabBarIcon
+        ).map((route: any) => {
           const { options } = descriptors[route.key];
-          const isFocused = state.index === index;
+          const isFocused = state.routes[state.index]?.key === route.key;
 
           const onPress = () => {
             const event = navigation.emit({

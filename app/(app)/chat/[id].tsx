@@ -1,3 +1,5 @@
+import * as FileSystem from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -270,10 +272,43 @@ export default function ConversationScreen() {
 
   async function toggleHeart(msg: Message) {
     const newVal = !msg.hearted;
-    await supabase.from('messages').update({ hearted: newVal }).eq('id', msg.id);
+
+    // Optimistic update so the heart responds instantly
     setMessages((prev) =>
       prev.map((m) => (m.id === msg.id ? { ...m, hearted: newVal } : m)),
     );
+
+    await supabase.from('messages').update({ hearted: newVal }).eq('id', msg.id);
+
+    if (newVal) {
+      // Save to Memories table so the album screen can query it
+      await supabase.from('memories').insert({
+        user_id: user!.id,
+        message_id: msg.id,
+      });
+
+      // Save to iOS Photos — download to cache first, then hand off to MediaLibrary
+      // Note: Snapchat saves to the camera roll automatically on heart; we match that.
+      try {
+        const { status } = await MediaLibrary.requestPermissionsAsync();
+        if (status === 'granted') {
+          const ext = msg.mediaType === 'video' ? 'mp4' : 'jpg';
+          const localUri = `${FileSystem.cacheDirectory}pixobot_${msg.id}.${ext}`;
+          const { uri } = await FileSystem.downloadAsync(msg.mediaUrl, localUri);
+          await MediaLibrary.saveToLibraryAsync(uri);
+        }
+      } catch (e) {
+        // Non-fatal — the heart still saves in-app even if Photos access is denied
+        console.warn('Failed to save to iOS Photos:', e);
+      }
+    } else {
+      // Remove from Memories table — does not remove from iOS Photos (unexpected behavior)
+      await supabase
+        .from('memories')
+        .delete()
+        .eq('user_id', user!.id)
+        .eq('message_id', msg.id);
+    }
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -404,7 +439,8 @@ function Header({ username, onBack }: { username: string; onBack: () => void }) 
         </Svg>
       </Pressable>
       <Text style={styles.headerTitle} numberOfLines={1}>{username}</Text>
-      <View style={styles.backBtn} /> {/* spacer to center title */}
+      {/* spacer to center title */}
+      <View style={styles.backBtn} />
     </View>
   );
 }
