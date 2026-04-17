@@ -1,6 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -18,6 +18,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/lib/store/auth';
 import { useMediaStore } from '@/lib/store/media';
 import { colors, fontSize, fontWeight, radius, spacing } from '@/tokens';
+import { BackArrow, SearchIcon } from '@/components/icons';
 
 // Note: Snapchat's send-to screen loads the friend list from a local cache
 // and syncs in the background. We query Supabase directly on mount — fast
@@ -40,12 +41,7 @@ export default function SendToScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
 
-  useEffect(() => {
-    if (!pendingUri) router.back();
-    loadFriends();
-  }, []);
-
-  async function loadFriends() {
+  const loadFriends = useCallback(async () => {
     if (!user) return;
     setLoading(true);
 
@@ -86,7 +82,12 @@ export default function SendToScreen() {
     }
 
     setLoading(false);
-  }
+  }, [user]);
+
+  useEffect(() => {
+    if (!pendingUri) router.back();
+    loadFriends();
+  }, []);
 
   function toggleSelect(id: string) {
     setSelected((prev) => {
@@ -177,9 +178,10 @@ export default function SendToScreen() {
     }
   }
 
-  const filtered = friends.filter((f) =>
-    f.username.toLowerCase().includes(query.toLowerCase()),
-  );
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase();
+    return q ? friends.filter((f) => f.username.toLowerCase().includes(q)) : friends;
+  }, [friends, query]);
 
   const initials = (username: string) => username[0]?.toUpperCase() ?? '?';
 
@@ -301,33 +303,6 @@ export default function SendToScreen() {
 }
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
-
-function BackArrow() {
-  return (
-    <Svg width={22} height={22} viewBox="0 0 22 22" fill="none">
-      <Path
-        d="M14 4l-7 7 7 7"
-        stroke={colors.textPrimary}
-        strokeWidth={1.5}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </Svg>
-  );
-}
-
-function SearchIcon() {
-  return (
-    <Svg width={18} height={18} viewBox="0 0 18 18" fill="none">
-      <Path
-        d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12zM16 16l-3.5-3.5"
-        stroke={colors.textTertiary}
-        strokeWidth={1.5}
-        strokeLinecap="round"
-      />
-    </Svg>
-  );
-}
 
 function CheckIcon() {
   return (

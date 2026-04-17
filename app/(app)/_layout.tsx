@@ -1,62 +1,69 @@
 import { Tabs } from 'expo-router';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { TabBarIcon } from '@/components/tab-bar-icon';
-import { colors, radius, shadow, spacing } from '@/tokens';
+import { usePresencePing } from '@/lib/hooks/usePresencePing';
+import { useAuthStore } from '@/lib/store/auth';
+import { colors, fontSize, letterSpacing, spacing } from '@/tokens';
 
-// Note: Custom floating pill tab bar — matches the PRD design exactly.
-// Snapchat uses a similar floating bottom nav; we implement it as a custom tabBar render prop.
+const TAB_LABELS: Record<string, string> = {
+  chat: 'CHATS',
+  camera: 'CAMERA',
+  profile: 'PROFILE',
+};
 
-function FloatingTabBar({ state, descriptors, navigation }: any) {
+function EditorialTabBar({ state, descriptors, navigation }: any) {
   const insets = useSafeAreaInsets();
 
-  // Camera is full-bleed — no tab bar overlay, matching the PRD spec.
-  // Users return to camera by tapping its icon from chat or profile.
   if (state.routes[state.index].name === 'camera') return null;
 
+  const visibleRoutes = state.routes.filter(
+    (route: any) => !!descriptors[route.key].options.tabBarIcon,
+  );
+
   return (
-    <View style={[styles.wrapper, { paddingBottom: insets.bottom + spacing.sm }]}>
-      <View style={styles.pill}>
-        {state.routes.filter((route: any) =>
-          // Exclude hidden routes (e.g. friends) — href: null keeps them in
-          // state.routes for custom tab bars, but they have no tabBarIcon.
-          !!descriptors[route.key].options.tabBarIcon
-        ).map((route: any) => {
-          const { options } = descriptors[route.key];
-          const isFocused = state.routes[state.index]?.key === route.key;
+    <View style={[styles.wrapper, { paddingBottom: insets.bottom + spacing.md }]} pointerEvents="box-none">
+      <View style={styles.bar}>
+      {visibleRoutes.map((route: any) => {
+        const { options } = descriptors[route.key];
+        const isFocused = state.routes[state.index]?.key === route.key;
+        const color = isFocused ? colors.textPrimary : colors.textTertiary;
 
-          const onPress = () => {
-            const event = navigation.emit({
-              type: 'tabPress',
-              target: route.key,
-              canPreventDefault: true,
-            });
-            if (!isFocused && !event.defaultPrevented) {
-              navigation.navigate(route.name);
-            }
-          };
+        const onPress = () => {
+          const event = navigation.emit({
+            type: 'tabPress',
+            target: route.key,
+            canPreventDefault: true,
+          });
+          if (!isFocused && !event.defaultPrevented) {
+            navigation.navigate(route.name);
+          }
+        };
 
-          return (
-            <Pressable key={route.key} style={styles.tab} onPress={onPress} hitSlop={8}>
-              {options.tabBarIcon?.({
-                focused: isFocused,
-                color: isFocused ? colors.accent : colors.textSecondary,
-                size: 24,
-              })}
-            </Pressable>
-          );
-        })}
+        return (
+          <Pressable key={route.key} style={styles.tab} onPress={onPress} hitSlop={8}>
+            {options.tabBarIcon?.({ focused: isFocused, color, size: 18 })}
+            <Text style={[styles.tabLabel, { color }]}>
+              {TAB_LABELS[route.name] ?? route.name.toUpperCase()}
+            </Text>
+            {isFocused && <View style={styles.activeBar} />}
+          </Pressable>
+        );
+      })}
       </View>
     </View>
   );
 }
 
 export default function AppLayout() {
+  const user = useAuthStore((s) => s.user);
+  usePresencePing(user?.id);
+
   return (
     <Tabs
       initialRouteName="camera"
-      tabBar={(props) => <FloatingTabBar {...props} />}
+      tabBar={(props) => <EditorialTabBar {...props} />}
       screenOptions={{ headerShown: false }}>
       <Tabs.Screen
         name="chat"
@@ -64,7 +71,6 @@ export default function AppLayout() {
           tabBarIcon: ({ color }) => <TabBarIcon name="chat" color={color} />,
         }}
       />
-      {/* camera is now a flat file (camera.tsx) so the route name is exactly "camera" */}
       <Tabs.Screen
         name="camera"
         options={{
@@ -77,7 +83,6 @@ export default function AppLayout() {
           tabBarIcon: ({ color }) => <TabBarIcon name="profile" color={color} />,
         }}
       />
-      {/* friends is pushed from Profile — not a visible tab */}
       <Tabs.Screen name="friends" options={{ href: null }} />
     </Tabs>
   );
@@ -87,24 +92,35 @@ const styles = StyleSheet.create({
   wrapper: {
     position: 'absolute',
     bottom: 0,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    pointerEvents: 'box-none',
+    left: spacing.xl,
+    right: spacing.xl,
+    alignItems: 'stretch',
   },
-  pill: {
+  bar: {
     flexDirection: 'row',
     backgroundColor: colors.surface,
-    borderRadius: radius.navPill,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    gap: spacing.xxl,
-    ...shadow.navPill,
+    borderWidth: 1.5,
+    borderColor: colors.borderStrong,
+    paddingTop: 10,
+    paddingBottom: 10,
   },
   tab: {
+    flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
-    width: 32,
-    height: 32,
+    gap: 4,
+    paddingVertical: 4,
+  },
+  tabLabel: {
+    fontSize: fontSize.label,
+    fontWeight: '700',
+    letterSpacing: letterSpacing.caps,
+  },
+  activeBar: {
+    position: 'absolute',
+    top: -10,
+    left: '20%',
+    right: '20%',
+    height: 2,
+    backgroundColor: colors.textPrimary,
   },
 });

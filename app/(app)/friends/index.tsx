@@ -16,6 +16,7 @@ import Svg, { Path, Polyline } from 'react-native-svg';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/lib/store/auth';
 import { colors, fontSize, fontWeight, radius, spacing } from '@/tokens';
+import { BackArrow, ClearIcon, SearchIcon } from '@/components/icons';
 
 // Note: We load all users once on mount and filter client-side. This is fine
 // for a small close-friends app — avoids the debounce/network lag of per-keystroke queries.
@@ -111,27 +112,51 @@ export default function FriendsScreen() {
 
   async function sendRequest(toUserId: string) {
     setActionPending(toUserId);
-    const { error } = await supabase.from('friendships').insert({
-      requester_id: user!.id,
-      addressee_id: toUserId,
-      status: 'pending',
-    });
-    if (error) Alert.alert('Error', 'Could not send friend request.');
-    await load();
+    const { data, error } = await supabase
+      .from('friendships')
+      .insert({ requester_id: user!.id, addressee_id: toUserId, status: 'pending' })
+      .select('id')
+      .single();
+    if (error) {
+      Alert.alert('Error', 'Could not send friend request.');
+    } else {
+      setAllUsers((prev) =>
+        prev.map((u) =>
+          u.id === toUserId
+            ? { ...u, relationship: { friendshipId: data.id, status: 'pending_sent' } }
+            : u,
+        ),
+      );
+    }
     setActionPending(null);
   }
 
   async function acceptRequest(friendshipId: string, fromUserId: string) {
     setActionPending(fromUserId);
-    await supabase.from('friendships').update({ status: 'accepted' }).eq('id', friendshipId);
-    await load();
+    const { error } = await supabase
+      .from('friendships')
+      .update({ status: 'accepted' })
+      .eq('id', friendshipId);
+    if (!error) {
+      setAllUsers((prev) =>
+        prev.map((u) =>
+          u.id === fromUserId
+            ? { ...u, relationship: { friendshipId, status: 'accepted' } }
+            : u,
+        ),
+      );
+    }
     setActionPending(null);
   }
 
   async function removeOrCancel(friendshipId: string, otherUserId: string) {
     setActionPending(otherUserId);
-    await supabase.from('friendships').delete().eq('id', friendshipId);
-    await load();
+    const { error } = await supabase.from('friendships').delete().eq('id', friendshipId);
+    if (!error) {
+      setAllUsers((prev) =>
+        prev.map((u) => (u.id === otherUserId ? { ...u, relationship: null } : u)),
+      );
+    }
     setActionPending(null);
   }
 
@@ -275,30 +300,6 @@ export default function FriendsScreen() {
 }
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
-
-function BackArrow() {
-  return (
-    <Svg width={22} height={22} viewBox="0 0 22 22" fill="none">
-      <Path d="M14 4l-7 7 7 7" stroke={colors.textPrimary} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
-    </Svg>
-  );
-}
-
-function SearchIcon() {
-  return (
-    <Svg width={18} height={18} viewBox="0 0 18 18" fill="none">
-      <Path d="M8 14A6 6 0 1 0 8 2a6 6 0 0 0 0 12zM16 16l-3.5-3.5" stroke={colors.textTertiary} strokeWidth={1.5} strokeLinecap="round" />
-    </Svg>
-  );
-}
-
-function ClearIcon() {
-  return (
-    <Svg width={18} height={18} viewBox="0 0 18 18" fill="none">
-      <Path d="M4 4l10 10M14 4L4 14" stroke={colors.textTertiary} strokeWidth={1.5} strokeLinecap="round" />
-    </Svg>
-  );
-}
 
 function PlusIcon() {
   return (

@@ -526,7 +526,7 @@ const styles = StyleSheet.create({
   dismissBtn: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 0,
     backgroundColor: 'rgba(0,0,0,0.55)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -539,7 +539,7 @@ const styles = StyleSheet.create({
   colorCircle: {
     width: 26,
     height: 26,
-    borderRadius: 13,
+    borderRadius: 0,
     borderWidth: 0,
     borderColor: colors.accent,
   },
@@ -558,7 +558,7 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 8,
+    borderRadius: 0,
   },
   toolBtnActive: { backgroundColor: 'rgba(255,255,255,0.18)' },
   toolBtnLabel: { color: '#fff', fontSize: 15, fontWeight: '600' },
@@ -583,7 +583,7 @@ const styles = StyleSheet.create({
   sendBtn: {
     width: 64,
     height: 64,
-    borderRadius: 32,
+    borderRadius: 0,
     backgroundColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',

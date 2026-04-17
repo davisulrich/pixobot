@@ -338,20 +338,20 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.xl,
     paddingVertical: spacing.md,
   },
   backBtn: { width: 36 },
   title: {
     flex: 1,
     textAlign: 'center',
-    fontSize: fontSize.title,
+    fontSize: fontSize.headline,
     fontWeight: fontWeight.title,
     color: colors.textPrimary,
   },
   headerSpacer: { width: 36 },
 
-  scroll: { paddingHorizontal: spacing.lg, paddingBottom: spacing.screen },
+  scroll: { paddingHorizontal: spacing.xl, paddingBottom: spacing.screen },
 
   sectionLabel: {
     fontSize: fontSize.label,
@@ -371,15 +371,15 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 15,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: 20,
     gap: spacing.sm,
   },
   rowPressed: { backgroundColor: colors.surfaceMuted },
-  actionRow: { paddingVertical: 20 },
+  actionRow: { paddingVertical: 22 },
   rowLabel: {
     flex: 1,
-    fontSize: fontSize.body,
+    fontSize: fontSize.headline,
     fontWeight: fontWeight.body,
     color: colors.textPrimary,
   },

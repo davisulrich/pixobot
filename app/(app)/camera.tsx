@@ -53,6 +53,8 @@ export default function CameraScreen() {
 
   const [facing, setFacing] = useState<CameraType>('back');
   const [flash, setFlash] = useState<FlashMode>('off');
+  const [zoom, setZoom] = useState(0);
+  const zoomBase = useSharedValue(0);
   const [isRecording, setIsRecording] = useState(false);
 
   const cameraRef = useRef<CameraView>(null);
@@ -115,9 +117,24 @@ export default function CameraScreen() {
     .direction(Directions.RIGHT)
     .onEnd(() => runOnJS(goToChat)());
 
+  // Pinch to zoom — maps pinch scale to camera zoom (0–1).
+  // Uses Simultaneous so it runs alongside 1-finger gestures without conflict.
+  const pinchZoom = Gesture.Pinch()
+    .onUpdate((e) => {
+      const next = Math.max(0, Math.min(1, zoomBase.value * e.scale));
+      runOnJS(setZoom)(next);
+    })
+    .onEnd(() => {
+      zoomBase.value = zoom;
+    });
+
   // Race: the first gesture to recognize wins — flings and double-tap are
   // distinct enough in shape that they won't accidentally cancel each other.
-  const cameraGestures = Gesture.Race(flingLeft, flingRight, doubleTap);
+  // Pinch runs simultaneously since it uses 2 fingers and never conflicts.
+  const cameraGestures = Gesture.Simultaneous(
+    pinchZoom,
+    Gesture.Race(flingLeft, flingRight, doubleTap),
+  );
 
   // ── Video recording ───────────────────────────────────────────────────────────
 
@@ -153,7 +170,8 @@ export default function CameraScreen() {
   async function takePhoto() {
     if (!cameraRef.current || !cameraReadyRef.current) return;
     pulseShutter();
-    const result = await cameraRef.current.takePictureAsync({ quality: 0.9 });
+    // skipProcessing bypasses EXIF/orientation post-processing for near-instant capture
+    const result = await cameraRef.current.takePictureAsync({ quality: 0.85, skipProcessing: true });
     if (result?.uri) {
       handleCapture(result.uri, 'photo');
     }
@@ -234,6 +252,7 @@ export default function CameraScreen() {
             facing={facing}
             flash={flash}
             mode="video"
+            zoom={zoom}
             onCameraReady={handleCameraReady}
           />
 
@@ -440,7 +459,6 @@ const styles = StyleSheet.create({
     color: colors.accentDark,
   },
 
-  // Top controls — PRD: 40px diameter, rgba(0,0,0,0.45), white icons
   topRow: {
     position: 'absolute',
     top: 0,
@@ -454,8 +472,8 @@ const styles = StyleSheet.create({
   controlBtn: {
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: 0,
+    backgroundColor: 'rgba(0,0,0,0.55)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -485,8 +503,8 @@ const styles = StyleSheet.create({
   navBtn: {
     width: 44,
     height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.45)',
+    borderRadius: 0,
+    backgroundColor: 'rgba(0,0,0,0.55)',
     alignItems: 'center',
     justifyContent: 'center',
   },

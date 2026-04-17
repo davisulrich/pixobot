@@ -13,7 +13,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/lib/store/auth';
-import { colors, fontSize, fontWeight, lineHeight, radius, spacing } from '@/tokens';
+import { getPresence, formatPresence } from '@/lib/presence';
+import { colors, fontSize, fontWeight, letterSpacing, lineHeight, spacing } from '@/tokens';
+import { relativeTime as _relativeTime } from '@/lib/utils';
+
+// Uppercase timestamps for the editorial list style
+function relativeTime(iso: string) {
+  return _relativeTime(iso).toUpperCase();
+}
 
 type LatestMessage = {
   mediaType: 'photo' | 'video';
@@ -29,15 +36,6 @@ type ConvRow = {
   latestMessage: LatestMessage | null;
 };
 
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return 'now';
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  return `${Math.floor(hrs / 24)}d`;
-}
 
 export default function ChatListScreen() {
   const router = useRouter();
@@ -46,11 +44,11 @@ export default function ChatListScreen() {
   const [conversations, setConversations] = useState<ConvRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [presence, setPresence] = useState<Record<string, number | null>>({});
 
   const load = useCallback(async () => {
     if (!user) return;
 
-    // Fetch conversations with both user rows joined
     const { data: convData } = await supabase
       .from('conversations')
       .select(
@@ -69,8 +67,6 @@ export default function ChatListScreen() {
     }
 
     const convIds = convData.map((c) => c.id);
-
-    // Fetch all recent messages, then keep the latest per conversation in JS
     const { data: msgData } = await supabase
       .from('messages')
       .select('id, conversation_id, media_type, sender_id, opened_at, created_at')
@@ -104,19 +100,19 @@ export default function ChatListScreen() {
     setConversations(rows);
     setLoading(false);
     setRefreshing(false);
+
+    const otherUserIds = rows.map((r) => r.otherUser.id);
+    const presenceData = await getPresence(otherUserIds);
+    setPresence(presenceData);
   }, [user]);
 
   useEffect(() => {
     load();
-
-    // Refresh the list whenever any conversation or message changes.
-    // Granular diffing isn't needed — the list is small and loads fast.
     const channel = supabase
       .channel(`chat-list-${Date.now()}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, load)
       .subscribe();
-
     return () => { supabase.removeChannel(channel); };
   }, [load]);
 
@@ -134,7 +130,7 @@ export default function ChatListScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
-        <Text style={styles.screenTitle}>Chats</Text>
+        <ScreenHeader />
         <View style={styles.centered}>
           <ActivityIndicator color={colors.accent} />
         </View>
@@ -144,7 +140,7 @@ export default function ChatListScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <Text style={styles.screenTitle}>Chats</Text>
+      <ScreenHeader />
 
       <FlatList
         data={conversations}
@@ -153,39 +149,42 @@ export default function ChatListScreen() {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={() => { setRefreshing(true); load(); }}
-            tintColor={colors.accent}
+            tintColor={colors.textPrimary}
           />
         }
         renderItem={({ item }) => {
           const status = getStatus(item);
           const initial = item.otherUser.username.charAt(0).toUpperCase();
+          const presenceLabel = formatPresence(presence[item.otherUser.id] ?? null);
+          const isActive = presenceLabel === 'Active now';
+
           return (
+            // Pressable only carries the pressed background — all layout is in rowInner
             <Pressable
-              style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+              style={({ pressed }) => pressed ? styles.rowPressed : null}
               onPress={() => router.push(`/(app)/chat/${item.id}`)}>
-              {/* Avatar */}
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{initial}</Text>
-              </View>
+              <View style={styles.rowInner}>
+                <View style={[styles.avatar, status.unread && styles.avatarUnread]}>
+                  <Text style={styles.avatarText}>{initial}</Text>
+                  {isActive && <View style={styles.activeDot} />}
+                </View>
 
-              {/* Text */}
-              <View style={styles.rowBody}>
-                <Text
-                  style={[styles.rowUsername, status.unread && styles.rowUsernameBold]}
-                  numberOfLines={1}>
-                  {item.otherUser.username}
-                </Text>
-                <Text
-                  style={[styles.rowStatus, status.unread && styles.rowStatusUnread]}
-                  numberOfLines={1}>
-                  {status.label}
-                </Text>
-              </View>
+                <View style={styles.rowBody}>
+                  <Text style={[styles.rowUsername, status.unread && styles.rowUsernameBold]} numberOfLines={1}>
+                    {item.otherUser.username}
+                    {presenceLabel && presenceLabel !== 'Active now' && (
+                      <Text style={styles.rowPresence}>  {presenceLabel}</Text>
+                    )}
+                  </Text>
+                  <Text style={[styles.rowStatus, status.unread && styles.rowStatusUnread]} numberOfLines={1}>
+                    {status.label}
+                  </Text>
+                </View>
 
-              {/* Right: time + unread dot */}
-              <View style={styles.rowRight}>
-                <Text style={styles.rowTime}>{relativeTime(item.lastActivityAt)}</Text>
-                {status.unread && <View style={styles.unreadDot} />}
+                <View style={styles.rowRight}>
+                  <Text style={styles.rowTime}>{relativeTime(item.lastActivityAt)}</Text>
+                  {status.unread && <View style={styles.unreadMark} />}
+                </View>
               </View>
             </Pressable>
           );
@@ -193,29 +192,46 @@ export default function ChatListScreen() {
         ListEmptyComponent={
           <View style={styles.emptyState}>
             <Text style={styles.emptyTitle}>No chats yet</Text>
-            <Text style={styles.emptyBody}>
-              Send a snap to a friend to start a conversation.
-            </Text>
+            <Text style={styles.emptyBody}>Send a snap to start a conversation.</Text>
           </View>
         }
-        contentContainerStyle={conversations.length === 0 ? { flex: 1 } : { paddingBottom: spacing.screen }}
+        contentContainerStyle={conversations.length === 0 ? styles.listEmpty : styles.listContent}
       />
     </SafeAreaView>
   );
 }
+
+function ScreenHeader() {
+  return (
+    <View style={styles.header}>
+      <Text style={styles.screenTitle}>CHATS</Text>
+      <View style={styles.headerRule} />
+    </View>
+  );
+}
+
+const H_PAD = 28;
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
   },
+  header: {
+    paddingHorizontal: H_PAD,
+    paddingTop: spacing.lg,
+  },
   screenTitle: {
     fontSize: fontSize.title,
     fontWeight: fontWeight.title,
     color: colors.textPrimary,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
+    letterSpacing: letterSpacing.caps,
+    lineHeight: fontSize.title * lineHeight.title,
+    paddingBottom: spacing.md,
+  },
+  headerRule: {
+    height: 1.5,
+    backgroundColor: colors.borderStrong,
   },
   centered: {
     flex: 1,
@@ -223,72 +239,96 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 12,
-    gap: spacing.md,
-  },
   rowPressed: {
     backgroundColor: colors.surfaceMuted,
   },
+  // Layout lives here, not on Pressable — fixes padding bug with New Architecture
+  rowInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: H_PAD,
+    paddingVertical: 20,
+    gap: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
 
   avatar: {
-    width: 48,
-    height: 48,
-    borderRadius: radius.avatar,
+    width: 44,
+    height: 44,
     backgroundColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
+  },
+  avatarUnread: {
+    backgroundColor: colors.accent,
   },
   avatarText: {
     fontSize: fontSize.headline,
-    fontWeight: fontWeight.title,
+    fontWeight: '800' as const,
     color: colors.accentDark,
+  },
+  activeDot: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 10,
+    height: 10,
+    backgroundColor: '#22c55e',
+    borderWidth: 2,
+    borderColor: colors.bg,
   },
 
   rowBody: {
     flex: 1,
-    gap: 2,
+    gap: 4,
+    minWidth: 0,
   },
   rowUsername: {
-    fontSize: fontSize.body,
-    fontWeight: fontWeight.body,
+    fontSize: fontSize.headline,
+    fontWeight: '600' as const,
     color: colors.textPrimary,
   },
   rowUsernameBold: {
-    fontWeight: '600',
+    fontWeight: '800' as const,
+  },
+  rowPresence: {
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.body,
+    color: colors.textTertiary,
   },
   rowStatus: {
     fontSize: fontSize.caption,
     color: colors.textSecondary,
   },
   rowStatusUnread: {
-    color: colors.accent,
-    fontWeight: '500',
+    color: colors.textPrimary,
+    fontWeight: '600' as const,
   },
 
   rowRight: {
     alignItems: 'flex-end',
     gap: 6,
+    flexShrink: 0,
   },
   rowTime: {
-    fontSize: fontSize.caption,
+    fontSize: fontSize.label,
+    fontWeight: '700' as const,
     color: colors.textTertiary,
+    letterSpacing: letterSpacing.label,
   },
-  unreadDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.accent,
+  unreadMark: {
+    width: 6,
+    height: 6,
+    backgroundColor: colors.textPrimary,
   },
 
   emptyState: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: spacing.xl,
+    paddingHorizontal: H_PAD,
     gap: spacing.sm,
   },
   emptyTitle: {
@@ -296,6 +336,7 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.title,
     color: colors.textPrimary,
     textAlign: 'center',
+    letterSpacing: letterSpacing.caps,
   },
   emptyBody: {
     fontSize: fontSize.body,
@@ -303,4 +344,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: fontSize.body * lineHeight.body,
   },
+  listContent: { paddingBottom: spacing.screen },
+  listEmpty: { flex: 1 },
 });

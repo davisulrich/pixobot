@@ -13,12 +13,18 @@ import {
   Text,
   View,
 } from 'react-native';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+} from 'react-native-reanimated';
 import Svg, { Path, Rect } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/lib/store/auth';
 import { colors, fontSize, fontWeight, radius, spacing } from '@/tokens';
+import { relativeTime } from '@/lib/utils';
 
 // Note: Messages are shown chronologically (oldest at top, newest at bottom).
 // Received snaps tap to open full-screen; the viewer marks opened_at on mount.
@@ -49,15 +55,6 @@ function parseMsg(raw: any): Message {
   };
 }
 
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return 'now';
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  return `${Math.floor(hrs / 24)}d`;
-}
 
 // ─── Full-screen snap viewer ──────────────────────────────────────────────────
 
@@ -78,31 +75,51 @@ function SnapViewer({
     },
   );
 
-  console.log('[SnapViewer] mediaUrl:', message.mediaUrl, 'mediaType:', message.mediaType);
+  const scale = useSharedValue(1);
+  const savedScale = useSharedValue(1);
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+
+  const pinch = Gesture.Pinch()
+    .onUpdate((e) => {
+      scale.value = Math.max(1, Math.min(5, savedScale.value * e.scale));
+    })
+    .onEnd(() => {
+      savedScale.value = scale.value;
+    });
 
   return (
-    <Pressable style={styles.viewer} onPress={onDismiss}>
-      {message.mediaType === 'photo' ? (
-        <Image
-          source={{ uri: message.mediaUrl }}
-          style={StyleSheet.absoluteFill}
-          contentFit="cover"
-          onError={(e) => console.error('[SnapViewer] image load error:', e)}
-        />
-      ) : (
-        <VideoView
-          player={player}
-          style={StyleSheet.absoluteFill}
-          contentFit="cover"
-          nativeControls={false}
-        />
-      )}
+    <GestureHandlerRootView style={styles.viewer}>
+      <GestureDetector gesture={pinch}>
+        <View style={StyleSheet.absoluteFill} collapsable={false}>
+          <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
+            {message.mediaType === 'photo' ? (
+              <Image
+                source={{ uri: message.mediaUrl }}
+                style={StyleSheet.absoluteFill}
+                contentFit="cover"
+              />
+            ) : (
+              <VideoView
+                player={player}
+                style={StyleSheet.absoluteFill}
+                contentFit="cover"
+                nativeControls={false}
+              />
+            )}
+          </Animated.View>
+        </View>
+      </GestureDetector>
       <SafeAreaView style={styles.viewerSafeArea} pointerEvents="box-none">
-        <View style={styles.viewerHintRow}>
-          <Text style={styles.viewerHint}>Tap to dismiss</Text>
+        <View style={styles.viewerTopRow} pointerEvents="box-none">
+          <Pressable onPress={onDismiss} style={styles.viewerCloseBtn} hitSlop={12}>
+            <Text style={styles.viewerCloseBtnText}>✕</Text>
+          </Pressable>
         </View>
       </SafeAreaView>
-    </Pressable>
+    </GestureHandlerRootView>
   );
 }
 
@@ -178,6 +195,7 @@ export default function ConversationScreen() {
   const [viewingMessage, setViewingMessage] = useState<Message | null>(null);
 
   const listRef = useRef<FlatList>(null);
+  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Data loading ───────────────────────────────────────────────────────────
 
@@ -238,11 +256,16 @@ export default function ConversationScreen() {
     return () => { supabase.removeChannel(channel); };
   }, [loadConversation]);
 
-  // Scroll to bottom when new messages arrive
+  // Scroll to bottom when new messages arrive; clear timer on unmount
   useEffect(() => {
-    if (messages.length > 0) {
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
-    }
+    if (messages.length === 0) return;
+    scrollTimerRef.current = setTimeout(
+      () => listRef.current?.scrollToEnd({ animated: true }),
+      80,
+    );
+    return () => {
+      if (scrollTimerRef.current) clearTimeout(scrollTimerRef.current);
+    };
   }, [messages.length]);
 
   // ── Actions ────────────────────────────────────────────────────────────────
@@ -480,8 +503,8 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
@@ -495,13 +518,14 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'center',
     fontSize: fontSize.headline,
-    fontWeight: fontWeight.title,
+    fontWeight: '700' as const,
     color: colors.textPrimary,
   },
 
-  // Message list
+  // Message list — extra bottom padding clears the floating nav bar (~105px tall)
   listContent: {
-    paddingVertical: spacing.sm,
+    paddingTop: spacing.sm,
+    paddingBottom: 120,
     flexGrow: 1,
   },
   emptyState: {
@@ -520,8 +544,8 @@ const styles = StyleSheet.create({
   msgRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: 12,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: 16,
     gap: spacing.md,
   },
   msgRowPressed: {
@@ -582,20 +606,22 @@ const styles = StyleSheet.create({
   viewerSafeArea: {
     ...StyleSheet.absoluteFillObject,
   },
-  viewerHintRow: {
-    position: 'absolute',
-    bottom: spacing.screen,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
+  viewerTopRow: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
   },
-  viewerHint: {
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: fontSize.caption,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: radius.button,
-    overflow: 'hidden',
+  viewerCloseBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewerCloseBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    lineHeight: 18,
   },
 });
