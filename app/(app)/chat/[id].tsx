@@ -6,6 +6,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Dimensions,
   FlatList,
   Modal,
   Pressable,
@@ -13,23 +14,17 @@ import {
   Text,
   View,
 } from 'react-native';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-} from 'react-native-reanimated';
 import Svg, { Path, Rect } from 'react-native-svg';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import type { OverlayData } from '@/lib/store/media';
+
+const { width: WINDOW_W, height: WINDOW_H } = Dimensions.get('window');
 
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/lib/store/auth';
 import { colors, fontSize, fontWeight, radius, spacing } from '@/tokens';
 import { relativeTime } from '@/lib/utils';
-
-// Note: Messages are shown chronologically (oldest at top, newest at bottom).
-// Received snaps tap to open full-screen; the viewer marks opened_at on mount.
-// Replay is supported up to 3 times (replay_count <= 3 per schema constraint).
-// Hearts update the `hearted` column; only recipients can update their received messages.
 
 type Message = {
   id: string;
@@ -40,6 +35,7 @@ type Message = {
   hearted: boolean;
   openedAt: string | null;
   createdAt: string;
+  overlayData: OverlayData | null;
 };
 
 function parseMsg(raw: any): Message {
@@ -52,14 +48,14 @@ function parseMsg(raw: any): Message {
     hearted: raw.hearted,
     openedAt: raw.opened_at,
     createdAt: raw.created_at,
+    overlayData: raw.overlay_data ?? null,
   };
 }
 
-
 // ─── Full-screen snap viewer ──────────────────────────────────────────────────
 
-// Extracted as its own component so useVideoPlayer gets its own lifecycle
-// and doesn't hold a stale source from a previously viewed snap.
+// Tap anywhere on the screen to dismiss or advance the carousel.
+// Transparent Pressable overlay handles the tap — avoids RNGH gesture issues inside Modals.
 function SnapViewer({
   message,
   onDismiss,
@@ -75,58 +71,78 @@ function SnapViewer({
     },
   );
 
-  const scale = useSharedValue(1);
-  const savedScale = useSharedValue(1);
-
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  const pinch = Gesture.Pinch()
-    .onUpdate((e) => {
-      scale.value = Math.max(1, Math.min(5, savedScale.value * e.scale));
-    })
-    .onEnd(() => {
-      savedScale.value = scale.value;
-    });
+  const overlay = message.overlayData;
 
   return (
-    <GestureHandlerRootView style={styles.viewer}>
-      <GestureDetector gesture={pinch}>
-        <View style={StyleSheet.absoluteFill} collapsable={false}>
-          <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
-            {message.mediaType === 'photo' ? (
-              <Image
-                source={{ uri: message.mediaUrl }}
-                style={StyleSheet.absoluteFill}
-                contentFit="cover"
-              />
-            ) : (
-              <VideoView
-                player={player}
-                style={StyleSheet.absoluteFill}
-                contentFit="cover"
-                nativeControls={false}
-              />
-            )}
-          </Animated.View>
-        </View>
-      </GestureDetector>
-      <SafeAreaView style={styles.viewerSafeArea} pointerEvents="box-none">
-        <View style={styles.viewerTopRow} pointerEvents="box-none">
-          <Pressable onPress={onDismiss} style={styles.viewerCloseBtn} hitSlop={12}>
-            <Text style={styles.viewerCloseBtnText}>✕</Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
-    </GestureHandlerRootView>
+    <View style={styles.viewer}>
+      {/* Layer 1 — base media */}
+      {message.mediaType === 'photo' ? (
+        <Image
+          source={{ uri: message.mediaUrl }}
+          style={StyleSheet.absoluteFill}
+          contentFit="cover"
+        />
+      ) : (
+        <VideoView
+          player={player}
+          style={StyleSheet.absoluteFill}
+          contentFit="cover"
+          nativeControls={false}
+        />
+      )}
+
+      {/* Layer 2 — SVG drawing overlay.
+          viewBox maps edit-screen coordinates to the current screen size. */}
+      {overlay && overlay.paths.length > 0 && (
+        <Svg
+          style={StyleSheet.absoluteFill}
+          viewBox={`0 0 ${overlay.width} ${overlay.height}`}
+          preserveAspectRatio="xMidYMid slice">
+          {overlay.paths.map((p, i) => (
+            <Path
+              key={i}
+              d={p.d}
+              stroke={p.color}
+              strokeWidth={4}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              fill="none"
+            />
+          ))}
+        </Svg>
+      )}
+
+      {/* Layer 3 — text boxes, positions scaled to current screen */}
+      {overlay && overlay.textBoxes.map((box, i) => {
+        const sx = WINDOW_W / overlay.width;
+        const sy = WINDOW_H / overlay.height;
+        return (
+          <Text
+            key={i}
+            style={{
+              position: 'absolute',
+              left: box.x * sx,
+              top: box.y * sy,
+              fontSize: 24 * Math.min(sx, sy) * box.scale,
+              fontWeight: '700',
+              color: '#fff',
+              textShadowColor: 'rgba(0,0,0,0.6)',
+              textShadowOffset: { width: 1, height: 1 },
+              textShadowRadius: 4,
+            }}>
+            {box.text}
+          </Text>
+        );
+      })}
+
+      {/* Layer 4 — transparent tap capture for dismiss/advance */}
+      <Pressable style={StyleSheet.absoluteFill} onPress={onDismiss} />
+    </View>
   );
 }
 
 // ─── Snap icon ────────────────────────────────────────────────────────────────
 
-// Square icon indicating media type and open state.
-// Filled yellow = received, unopened. Outlined = received, opened or sent.
 function SnapIcon({
   mediaType,
   filled,
@@ -164,11 +180,7 @@ function CameraIcon({ color }: { color: string }) {
         strokeWidth={1.4}
         strokeLinejoin="round"
       />
-      <Path
-        d="M9 11.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"
-        stroke={color}
-        strokeWidth={1.4}
-      />
+      <Path d="M9 11.5a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" stroke={color} strokeWidth={1.4} />
     </Svg>
   );
 }
@@ -185,17 +197,25 @@ function VideoIcon({ color }: { color: string }) {
 // ─── Main screen ─────────────────────────────────────────────────────────────
 
 export default function ConversationScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, autoOpen } = useLocalSearchParams<{ id: string; autoOpen?: string }>();
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
+  const insets = useSafeAreaInsets();
 
   const [otherUsername, setOtherUsername] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewingMessage, setViewingMessage] = useState<Message | null>(null);
 
+  // Carousel state — populated when navigated with autoOpen=true
+  const [carouselMessages, setCarouselMessages] = useState<Message[]>([]);
+  const [carouselIndex, setCarouselIndex] = useState(0);
+
   const listRef = useRef<FlatList>(null);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoOpenedRef = useRef(false);
+
+  const isCarousel = autoOpen === 'true';
 
   // ── Data loading ───────────────────────────────────────────────────────────
 
@@ -221,7 +241,7 @@ export default function ConversationScreen() {
 
     const { data: msgs } = await supabase
       .from('messages')
-      .select('id, sender_id, media_url, media_type, replay_count, hearted, opened_at, created_at')
+      .select('id, sender_id, media_url, media_type, replay_count, hearted, opened_at, created_at, overlay_data')
       .eq('conversation_id', id)
       .order('created_at', { ascending: true });
 
@@ -232,7 +252,6 @@ export default function ConversationScreen() {
   useEffect(() => {
     loadConversation();
 
-    // Real-time: handle new messages and updates (open, heart, replay)
     const channel = supabase
       .channel(`conv-${id}`)
       .on(
@@ -256,7 +275,7 @@ export default function ConversationScreen() {
     return () => { supabase.removeChannel(channel); };
   }, [loadConversation]);
 
-  // Scroll to bottom when new messages arrive; clear timer on unmount
+  // Scroll to bottom when new messages arrive
   useEffect(() => {
     if (messages.length === 0) return;
     scrollTimerRef.current = setTimeout(
@@ -268,13 +287,44 @@ export default function ConversationScreen() {
     };
   }, [messages.length]);
 
+  // Auto-open carousel after initial load when navigated with autoOpen=true.
+  // Only unopened received messages are included — replays are only available
+  // from the full timeline view.
+  useEffect(() => {
+    if (!isCarousel || loading || autoOpenedRef.current) return;
+    autoOpenedRef.current = true;
+    const unopened = messages.filter((m) => m.senderId !== user?.id && !m.openedAt);
+    if (unopened.length === 0) return; // Nothing new — timeline is shown instead
+    setCarouselMessages(unopened);
+    setCarouselIndex(0);
+    openSnap(unopened[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
+
   // ── Actions ────────────────────────────────────────────────────────────────
 
   function openSnap(msg: Message) {
     setViewingMessage(msg);
-    // Mark as opened immediately if this is a received, unopened message
-    if (msg.senderId !== user!.id && !msg.openedAt) {
+    if (msg.senderId !== user?.id && !msg.openedAt) {
       markOpened(msg.id);
+    }
+  }
+
+  // Called when viewer is tapped or back is requested.
+  // In carousel mode: advance to next snap or go back to chat list.
+  // In normal mode: just close the viewer.
+  function handleViewerDismiss() {
+    if (!isCarousel || carouselMessages.length === 0) {
+      setViewingMessage(null);
+      return;
+    }
+    const next = carouselIndex + 1;
+    if (next >= carouselMessages.length) {
+      setViewingMessage(null);
+      router.back();
+    } else {
+      setCarouselIndex(next);
+      openSnap(carouselMessages[next]);
     }
   }
 
@@ -287,7 +337,6 @@ export default function ConversationScreen() {
   }
 
   async function replaySnap(msg: Message) {
-    // Replay: show viewer again and increment replay_count (max 3 per schema)
     setViewingMessage(msg);
     const newCount = msg.replayCount + 1;
     await supabase.from('messages').update({ replay_count: newCount }).eq('id', msg.id);
@@ -297,9 +346,9 @@ export default function ConversationScreen() {
   }
 
   async function toggleHeart(msg: Message) {
+    if (!user) return;
     const newVal = !msg.hearted;
 
-    // Optimistic update so the heart responds instantly
     setMessages((prev) =>
       prev.map((m) => (m.id === msg.id ? { ...m, hearted: newVal } : m)),
     );
@@ -307,14 +356,11 @@ export default function ConversationScreen() {
     await supabase.from('messages').update({ hearted: newVal }).eq('id', msg.id);
 
     if (newVal) {
-      // Save to Memories table so the album screen can query it
       await supabase.from('memories').insert({
-        user_id: user!.id,
+        user_id: user.id,
         message_id: msg.id,
       });
 
-      // Save to iOS Photos — download to cache first, then hand off to MediaLibrary
-      // Note: Snapchat saves to the camera roll automatically on heart; we match that.
       try {
         const { status } = await MediaLibrary.requestPermissionsAsync();
         if (status === 'granted') {
@@ -324,15 +370,13 @@ export default function ConversationScreen() {
           await MediaLibrary.saveToLibraryAsync(uri);
         }
       } catch (e) {
-        // Non-fatal — the heart still saves in-app even if Photos access is denied
         console.warn('Failed to save to iOS Photos:', e);
       }
     } else {
-      // Remove from Memories table — does not remove from iOS Photos (unexpected behavior)
       await supabase
         .from('memories')
         .delete()
-        .eq('user_id', user!.id)
+        .eq('user_id', user.id)
         .eq('message_id', msg.id);
     }
   }
@@ -358,22 +402,20 @@ export default function ConversationScreen() {
         ref={listRef}
         data={messages}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 95 }]}
         ListEmptyComponent={
           <View style={styles.emptyState}>
             <Text style={styles.emptyText}>No snaps yet. Send the first one!</Text>
           </View>
         }
         renderItem={({ item }) => {
-          const isSent = item.senderId === user!.id;
+          const isSent = item.senderId === user?.id;
           const isUnopened = !item.openedAt;
           const canReplay = !isSent && !!item.openedAt && item.replayCount < 3;
 
-          // Icon appearance
           const filled = !isSent && isUnopened;
-          const accent = !isSent; // received = accent color, sent = gray
+          const accent = !isSent;
 
-          // Status text
           let statusText: string;
           if (isSent) {
             statusText = item.openedAt ? 'Opened' : 'Delivered';
@@ -397,10 +439,8 @@ export default function ConversationScreen() {
                 else if (canReplay) replaySnap(item);
               }}
               disabled={isSent || (!isUnopened && !canReplay)}>
-              {/* Snap type icon */}
               <SnapIcon mediaType={item.mediaType} filled={filled} accent={accent} />
 
-              {/* Description + status */}
               <View style={styles.msgBody}>
                 <Text style={styles.msgTitle} numberOfLines={1}>
                   {isSent
@@ -417,7 +457,6 @@ export default function ConversationScreen() {
                 </Text>
               </View>
 
-              {/* Time + heart (received only) */}
               <View style={styles.msgRight}>
                 <Text style={styles.msgTime}>{relativeTime(item.createdAt)}</Text>
                 {!isSent && (
@@ -434,14 +473,13 @@ export default function ConversationScreen() {
         }}
       />
 
-      {/* Full-screen viewer */}
       <Modal
         visible={!!viewingMessage}
         animationType="fade"
         statusBarTranslucent
-        onRequestClose={() => setViewingMessage(null)}>
+        onRequestClose={handleViewerDismiss}>
         {viewingMessage && (
-          <SnapViewer message={viewingMessage} onDismiss={() => setViewingMessage(null)} />
+          <SnapViewer message={viewingMessage} onDismiss={handleViewerDismiss} />
         )}
       </Modal>
     </SafeAreaView>
@@ -465,7 +503,6 @@ function Header({ username, onBack }: { username: string; onBack: () => void }) 
         </Svg>
       </Pressable>
       <Text style={styles.headerTitle} numberOfLines={1}>{username}</Text>
-      {/* spacer to center title */}
       <View style={styles.backBtn} />
     </View>
   );
@@ -499,7 +536,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -522,10 +558,9 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
 
-  // Message list — extra bottom padding clears the floating nav bar (~105px tall)
+  // paddingBottom is set dynamically via insets to clear the floating nav bar
   listContent: {
     paddingTop: spacing.sm,
-    paddingBottom: 120,
     flexGrow: 1,
   },
   emptyState: {
@@ -540,7 +575,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // Message row
   msgRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -552,7 +586,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
   },
 
-  // Snap icon — 44×44 rounded square with 2px border
   snapIcon: {
     width: 44,
     height: 44,
@@ -562,7 +595,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Message text
   msgBody: {
     flex: 1,
     gap: 2,
@@ -585,7 +617,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
-  // Right column
   msgRight: {
     alignItems: 'center',
     gap: spacing.xs,
@@ -598,30 +629,8 @@ const styles = StyleSheet.create({
     padding: 2,
   },
 
-  // Full-screen viewer
   viewer: {
     flex: 1,
     backgroundColor: '#000',
-  },
-  viewerSafeArea: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  viewerTopRow: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.sm,
-  },
-  viewerCloseBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  viewerCloseBtnText: {
-    color: '#fff',
-    fontSize: 15,
-    lineHeight: 18,
   },
 });

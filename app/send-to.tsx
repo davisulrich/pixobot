@@ -20,33 +20,36 @@ import { useMediaStore } from '@/lib/store/media';
 import { colors, fontSize, fontWeight, radius, spacing } from '@/tokens';
 import { BackArrow, SearchIcon } from '@/components/icons';
 
-// Note: Snapchat's send-to screen loads the friend list from a local cache
-// and syncs in the background. We query Supabase directly on mount — fast
-// enough given friend lists are small, and simpler than caching for v1.
-
 type Friend = {
   id: string;
   username: string;
 };
 
+type Group = {
+  id: string;
+  name: string;
+  memberIds: string[];
+};
+
 export default function SendToScreen() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
-  const { pendingUri, pendingType, clearPending } = useMediaStore();
+  const { pendingUri, pendingType, pendingOverlay, clearPending } = useMediaStore();
 
   const [friends, setFriends] = useState<Friend[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [recents, setRecents] = useState<Friend[]>([]);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
 
-  const loadFriends = useCallback(async () => {
+  const loadData = useCallback(async () => {
     if (!user) return;
     setLoading(true);
 
-    // Load accepted friendships and join to users table for display names
-    const { data, error } = await supabase
+    // Load friends
+    const { data: friendData } = await supabase
       .from('friendships')
       .select(
         `id, requester_id, addressee_id,
@@ -56,29 +59,58 @@ export default function SendToScreen() {
       .or(`requester_id.eq.${user.id},addressee_id.eq.${user.id}`)
       .eq('status', 'accepted');
 
-    if (!error && data) {
-      const list: Friend[] = data.map((row: any) => {
-        const other =
-          row.requester_id === user.id ? row.addressee : row.requester;
-        return { id: other.id, username: other.username };
+    const list: Friend[] = (friendData ?? []).map((row: any) => {
+      const other = row.requester_id === user.id ? row.addressee : row.requester;
+      return { id: other.id, username: other.username };
+    });
+    setFriends(list);
+
+    // Load recents
+    const { data: convData } = await supabase
+      .from('conversations')
+      .select('user_id_1, user_id_2')
+      .or(`user_id_1.eq.${user.id},user_id_2.eq.${user.id}`)
+      .order('last_activity_at', { ascending: false })
+      .limit(5);
+
+    if (convData) {
+      const recentIds = convData.map((c: any) =>
+        c.user_id_1 === user.id ? c.user_id_2 : c.user_id_1,
+      );
+      setRecents(list.filter((f) => recentIds.includes(f.id)));
+    }
+
+    // Load groups the user belongs to
+    const { data: myMemberships } = await supabase
+      .from('group_members')
+      .select('group_id')
+      .eq('user_id', user.id);
+
+    if (myMemberships && myMemberships.length > 0) {
+      const groupIds = myMemberships.map((m: any) => m.group_id);
+
+      const [{ data: groupsData }, { data: membersData }] = await Promise.all([
+        supabase.from('groups').select('id, name').in('id', groupIds),
+        supabase
+          .from('group_members')
+          .select('group_id, user_id')
+          .in('group_id', groupIds)
+          .neq('user_id', user.id),
+      ]);
+
+      const membersByGroup = new Map<string, string[]>();
+      (membersData ?? []).forEach((m: any) => {
+        if (!membersByGroup.has(m.group_id)) membersByGroup.set(m.group_id, []);
+        membersByGroup.get(m.group_id)!.push(m.user_id);
       });
-      setFriends(list);
 
-      // Load recents: friends from the last 5 conversations
-      const { data: convData } = await supabase
-        .from('conversations')
-        .select('user_id_1, user_id_2')
-        .or(`user_id_1.eq.${user.id},user_id_2.eq.${user.id}`)
-        .order('last_activity_at', { ascending: false })
-        .limit(5);
-
-      if (convData) {
-        const recentIds = convData.map((c: any) =>
-          c.user_id_1 === user.id ? c.user_id_2 : c.user_id_1,
-        );
-        const recentFriends = list.filter((f) => recentIds.includes(f.id));
-        setRecents(recentFriends);
-      }
+      setGroups(
+        (groupsData ?? []).map((g: any) => ({
+          id: g.id,
+          name: g.name,
+          memberIds: membersByGroup.get(g.id) ?? [],
+        })),
+      );
     }
 
     setLoading(false);
@@ -86,7 +118,7 @@ export default function SendToScreen() {
 
   useEffect(() => {
     if (!pendingUri) router.back();
-    loadFriends();
+    loadData();
   }, []);
 
   function toggleSelect(id: string) {
@@ -102,20 +134,18 @@ export default function SendToScreen() {
     setSending(true);
 
     try {
-      // 1. Upload media to Supabase Storage
+      // Upload media to Supabase Storage
       const ext = pendingType === 'video' ? 'mp4' : 'jpg';
       const storagePath = `${user.id}/${Date.now()}.${ext}`;
 
-      const base64 = await FileSystem.readAsStringAsync(pendingUri, {
-        encoding: 'base64',
-      });
+      const base64 = await FileSystem.readAsStringAsync(pendingUri, { encoding: 'base64' });
       const binary = atob(base64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) {
         bytes[i] = binary.charCodeAt(i);
       }
 
-      const { data: uploadData, error: uploadError } = await supabase.storage
+      const { error: uploadError } = await supabase.storage
         .from('messages')
         .upload(storagePath, bytes, {
           contentType: pendingType === 'video' ? 'video/mp4' : 'image/jpeg',
@@ -124,19 +154,33 @@ export default function SendToScreen() {
 
       if (uploadError) throw uploadError;
 
-      const { data: urlData } = supabase.storage
-        .from('messages')
-        .getPublicUrl(storagePath);
+      const { data: urlData } = supabase.storage.from('messages').getPublicUrl(storagePath);
       const mediaUrl = urlData.publicUrl;
 
-      // 2. For each selected recipient: find or create conversation, then create message
+      // Separate group selections from individual recipient selections
+      const groupSelections = [...selected].filter((id) => groups.find((g) => g.id === id));
+      const individualSelections = [...selected].filter((id) => !groups.find((g) => g.id === id));
+
+      // Send one group_message per selected group
       await Promise.all(
-        [...selected].map(async (recipientId) => {
-          // Note: conversations are keyed by sorted user IDs to avoid duplicates
+        groupSelections.map(async (groupId) => {
+          const { error } = await supabase.from('group_messages').insert({
+            group_id: groupId,
+            sender_id: user.id,
+            media_url: mediaUrl,
+            media_type: pendingType,
+            overlay_data: pendingOverlay ?? null,
+          });
+          if (error) throw error;
+        }),
+      );
+
+      // Send to each individual recipient: find/create conversation, insert message
+      await Promise.all(
+        individualSelections.map(async (recipientId) => {
           const [uid1, uid2] = [user.id, recipientId].sort();
 
           let conversationId: string;
-
           const { data: existing } = await supabase
             .from('conversations')
             .select('id')
@@ -165,12 +209,12 @@ export default function SendToScreen() {
             sender_id: user.id,
             media_url: mediaUrl,
             media_type: pendingType,
+            overlay_data: pendingOverlay ?? null,
           });
         }),
       );
 
       clearPending();
-      // Per confirmed UX: land on conversations list after send
       router.replace('/(app)/chat');
     } catch (err) {
       console.error('Send failed:', err);
@@ -215,7 +259,7 @@ export default function SendToScreen() {
         <View style={styles.centered}>
           <ActivityIndicator color={colors.accent} />
         </View>
-      ) : friends.length === 0 ? (
+      ) : friends.length === 0 && groups.length === 0 ? (
         <View style={styles.centered}>
           <Text style={styles.emptyText}>No friends yet.</Text>
           <Text style={styles.emptySubText}>Add friends from the Friends tab.</Text>
@@ -226,38 +270,72 @@ export default function SendToScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
-            recents.length > 0 && !query ? (
-              <>
-                {/* Recents — horizontal scroll, PRD §11.5 */}
-                <Text style={styles.sectionLabel}>RECENTS</Text>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.recentsRow}
-                  style={styles.recentsList}>
-                  {recents.map((f) => (
-                    <Pressable
-                      key={f.id}
-                      style={styles.recentItem}
-                      onPress={() => toggleSelect(f.id)}>
-                      <View
-                        style={[
-                          styles.avatar,
-                          selected.has(f.id) && styles.avatarSelected,
-                        ]}>
-                        <Text style={styles.avatarText}>{initials(f.username)}</Text>
-                      </View>
-                      <Text style={styles.recentName} numberOfLines={1}>
-                        {f.username}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </ScrollView>
-                <Text style={[styles.sectionLabel, { marginTop: spacing.lg }]}>
-                  FRIENDS
-                </Text>
-              </>
-            ) : null
+            <>
+              {/* Groups section */}
+              {groups.length > 0 && !query && (
+                <>
+                  <Text style={styles.sectionLabel}>GROUPS</Text>
+                  {groups.map((g) => {
+                    const isSel = selected.has(g.id);
+                    return (
+                      <Pressable
+                        key={g.id}
+                        style={[styles.friendRow, isSel && styles.friendRowSelected]}
+                        onPress={() => toggleSelect(g.id)}>
+                        <View style={styles.groupAvatar}>
+                          <GroupIcon />
+                        </View>
+                        <Text style={styles.friendName}>{g.name}</Text>
+                        <View style={[styles.radio, isSel && styles.radioSelected]}>
+                          {isSel && <CheckIcon />}
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+                  <Text style={[styles.sectionLabel, { marginTop: spacing.lg }]}>RECENTS</Text>
+                </>
+              )}
+
+              {/* Recents */}
+              {recents.length > 0 && !query && (
+                <>
+                  {groups.length === 0 && (
+                    <Text style={styles.sectionLabel}>RECENTS</Text>
+                  )}
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.recentsRow}
+                    style={styles.recentsList}>
+                    {recents.map((f) => (
+                      <Pressable
+                        key={f.id}
+                        style={styles.recentItem}
+                        onPress={() => toggleSelect(f.id)}>
+                        <View
+                          style={[
+                            styles.avatar,
+                            selected.has(f.id) && styles.avatarSelected,
+                          ]}>
+                          <Text style={styles.avatarText}>{initials(f.username)}</Text>
+                        </View>
+                        <Text style={styles.recentName} numberOfLines={1}>
+                          {f.username}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
+                  <Text style={[styles.sectionLabel, { marginTop: spacing.lg }]}>
+                    FRIENDS
+                  </Text>
+                </>
+              )}
+
+              {/* Friends label when no recents/groups */}
+              {recents.length === 0 && groups.length === 0 && !query && (
+                <Text style={styles.sectionLabel}>FRIENDS</Text>
+              )}
+            </>
           }
           renderItem={({ item }) => {
             const isSelected = selected.has(item.id);
@@ -269,8 +347,7 @@ export default function SendToScreen() {
                   <Text style={styles.avatarText}>{initials(item.username)}</Text>
                 </View>
                 <Text style={styles.friendName}>{item.username}</Text>
-                <View
-                  style={[styles.radio, isSelected && styles.radioSelected]}>
+                <View style={[styles.radio, isSelected && styles.radioSelected]}>
                   {isSelected && <CheckIcon />}
                 </View>
               </Pressable>
@@ -279,7 +356,7 @@ export default function SendToScreen() {
         />
       )}
 
-      {/* Sticky send button — only visible when something is selected */}
+      {/* Sticky send button */}
       {selected.size > 0 && (
         <View style={styles.sendBar}>
           <View style={styles.countBubble}>
@@ -314,6 +391,15 @@ function CheckIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </Svg>
+  );
+}
+
+function GroupIcon() {
+  return (
+    <Svg width={20} height={20} viewBox="0 0 20 20" fill="none">
+      <Path d="M13 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM7 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke={colors.textSecondary} strokeWidth={1.4} />
+      <Path d="M1 17c0-3.3 2.7-6 6-6M9 17c0-3.3 2.7-6 6-6" stroke={colors.textSecondary} strokeWidth={1.4} strokeLinecap="round" />
     </Svg>
   );
 }
@@ -375,7 +461,6 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
 
-  // Recents — horizontal scroll row
   recentsList: { marginBottom: spacing.sm },
   recentsRow: { paddingHorizontal: spacing.lg, gap: spacing.lg },
   recentItem: { alignItems: 'center', gap: spacing.xs, width: 56 },
@@ -385,7 +470,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // Avatar circle
   avatar: {
     width: 44,
     height: 44,
@@ -403,7 +487,14 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
 
-  // Friends list row
+  groupAvatar: {
+    width: 44,
+    height: 44,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
   friendRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -414,7 +505,6 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.sm,
   },
   friendRowSelected: {
-    // PRD §11.5: subtle yellow tint on selected row
     backgroundColor: `${colors.accent}1A`,
   },
   friendName: {
@@ -424,7 +514,6 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
 
-  // Radio circle
   radio: {
     width: 24,
     height: 24,
@@ -439,7 +528,6 @@ const styles = StyleSheet.create({
     borderColor: colors.accent,
   },
 
-  // Sticky send bar — PRD §11.5
   sendBar: {
     position: 'absolute',
     bottom: 0,

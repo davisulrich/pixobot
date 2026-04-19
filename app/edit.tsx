@@ -27,6 +27,7 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useMediaStore } from '@/lib/store/media';
+import type { OverlayData } from '@/lib/store/media';
 import { colors, radius, spacing } from '@/tokens';
 
 // Note: Snapchat's edit screen is a layered compositor:
@@ -145,7 +146,7 @@ function DraggableTextBox({
 
 export default function EditScreen() {
   const router = useRouter();
-  const { pendingUri, pendingType, clearPending } = useMediaStore();
+  const { pendingUri, pendingType, clearPending, setOverlay } = useMediaStore();
 
   const [activeMode, setActiveMode] = useState<ActiveMode>('none');
   const [drawColor, setDrawColor] = useState<'#000000' | '#FFFFFF'>('#000000');
@@ -172,6 +173,18 @@ export default function EditScreen() {
   function dismiss() {
     clearPending();
     router.back();
+  }
+
+  // Persist overlay data to the media store so send-to.tsx can attach it to the message.
+  function handleSend() {
+    const activePaths = completedPaths;
+    const activeTextBoxes = textBoxes.filter((b) => b.text.trim().length > 0);
+    const overlay: OverlayData | null =
+      activePaths.length > 0 || activeTextBoxes.length > 0
+        ? { paths: activePaths, textBoxes: activeTextBoxes, width: SCREEN_W, height: SCREEN_H }
+        : null;
+    setOverlay(overlay);
+    router.push('/send-to');
   }
 
   // ── Drawing ────────────────────────────────────────────────────────────────
@@ -446,7 +459,7 @@ export default function EditScreen() {
           <View style={styles.bottomRow} pointerEvents="box-none">
             <Pressable
               style={styles.sendBtn}
-              onPress={() => router.push('/send-to')}
+              onPress={handleSend}
               hitSlop={8}>
               <SendArrow />
             </Pressable>

@@ -9,7 +9,8 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.pixobot.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -27,6 +28,14 @@
     },
     "plugins": [
       "expo-router",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#F5C842",
+          "sounds": []
+        }
+      ],
       [
         "expo-camera",
         {

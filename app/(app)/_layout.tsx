@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { TabBarIcon } from '@/components/tab-bar-icon';
 import { usePresencePing } from '@/lib/hooks/usePresencePing';
+import { usePushNotifications } from '@/lib/hooks/usePushNotifications';
 import { useAuthStore } from '@/lib/store/auth';
 import { colors, fontSize, letterSpacing, spacing } from '@/tokens';
 
@@ -59,6 +60,12 @@ function EditorialTabBar({ state, descriptors, navigation }: any) {
 export default function AppLayout() {
   const user = useAuthStore((s) => s.user);
   usePresencePing(user?.id);
+  usePushNotifications(user?.id);
+
+  // When user logs out, user/session go null before the root layout's useEffect
+  // can redirect. Returning null here unmounts all (app) screens immediately,
+  // preventing any child component from accessing user.id on a null user.
+  if (!user) return null;
 
   return (
     <Tabs

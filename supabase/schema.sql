@@ -109,6 +109,9 @@ create table if not exists public.messages (
 
 create index if not exists messages_conversation_idx on public.messages(conversation_id);
 
+-- Drawing/text overlay data captured in the edit screen (null = no overlay)
+alter table public.messages add column if not exists overlay_data jsonb;
+
 alter table public.messages enable row level security;
 
 drop policy if exists "messages: read as participant"  on public.messages;
@@ -156,9 +159,67 @@ create policy "memories: read own"   on public.memories for select using (auth.u
 create policy "memories: insert own" on public.memories for insert with check (auth.uid() = user_id);
 create policy "memories: delete own" on public.memories for delete using (auth.uid() = user_id);
 
+-- ─── Groups ───────────────────────────────────────────────────────────────────
+
+create table if not exists public.groups (
+  id          uuid primary key default uuid_generate_v4(),
+  name        text not null,
+  created_by  uuid not null references public.users(id) on delete cascade,
+  created_at  timestamptz not null default now()
+);
+
+alter table public.groups enable row level security;
+
+drop policy if exists "groups: read member"  on public.groups;
+drop policy if exists "groups: insert own"   on public.groups;
+create policy "groups: read member"
+  on public.groups for select
+  using (
+    exists (
+      select 1 from public.group_members gm
+      where gm.group_id = id and gm.user_id = auth.uid()
+    )
+  );
+create policy "groups: insert own"
+  on public.groups for insert
+  with check (auth.uid() = created_by);
+
+create table if not exists public.group_members (
+  group_id    uuid not null references public.groups(id) on delete cascade,
+  user_id     uuid not null references public.users(id) on delete cascade,
+  joined_at   timestamptz not null default now(),
+  primary key (group_id, user_id)
+);
+
+create index if not exists group_members_user_idx on public.group_members(user_id);
+
+alter table public.group_members enable row level security;
+
+drop policy if exists "group_members: read own"  on public.group_members;
+drop policy if exists "group_members: insert"    on public.group_members;
+create policy "group_members: read own"
+  on public.group_members for select
+  using (
+    user_id = auth.uid()
+    or exists (
+      select 1 from public.groups g
+      where g.id = group_id and g.created_by = auth.uid()
+    )
+  );
+create policy "group_members: insert"
+  on public.group_members for insert
+  with check (
+    exists (
+      select 1 from public.groups g
+      where g.id = group_id and g.created_by = auth.uid()
+    )
+  );
+
 -- ─── Done ─────────────────────────────────────────────────────────────────────
 -- After this runs successfully:
 -- 1. Go to Storage → Create bucket → name: "messages" → enable Public bucket → Save
 -- 2. Under Storage → Policies, add:
 --      INSERT: auth.role() = 'authenticated'
 --      SELECT: true
+-- 3. Run the groups/group_members section above in your Supabase SQL editor
+--    to enable the Make a Group feature.

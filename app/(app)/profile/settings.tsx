@@ -45,6 +45,7 @@ export default function SettingsScreen() {
   // ── Username change ──────────────────────────────────────────────────────────
 
   async function handleUsernameChange() {
+    if (!user) return;
     const trimmed = newUsername.trim().toLowerCase();
     if (!trimmed) return;
     if (trimmed === currentUsername) {
@@ -75,7 +76,7 @@ export default function SettingsScreen() {
     const { error: dbErr } = await supabase
       .from('users')
       .update({ username: trimmed })
-      .eq('id', user!.id);
+      .eq('id', user.id);
 
     if (dbErr) {
       Alert.alert('Error', 'Could not update username. Try again.');

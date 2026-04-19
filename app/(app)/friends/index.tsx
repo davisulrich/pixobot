@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
+  Modal,
   Pressable,
   SectionList,
   StyleSheet,
@@ -15,11 +17,8 @@ import Svg, { Path, Polyline } from 'react-native-svg';
 
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/lib/store/auth';
-import { colors, fontSize, fontWeight, radius, spacing } from '@/tokens';
+import { colors, fontSize, fontWeight, letterSpacing, radius, spacing } from '@/tokens';
 import { BackArrow, ClearIcon, SearchIcon } from '@/components/icons';
-
-// Note: We load all users once on mount and filter client-side. This is fine
-// for a small close-friends app — avoids the debounce/network lag of per-keystroke queries.
 
 type Relationship = {
   friendshipId: string;
@@ -41,7 +40,13 @@ export default function FriendsScreen() {
   const [query, setQuery] = useState('');
   const [actionPending, setActionPending] = useState<string | null>(null);
 
-  // ── Load all users + my friendships in one go ────────────────────────────────
+  // Group creation state
+  const [groupModalVisible, setGroupModalVisible] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [selectedGroupMembers, setSelectedGroupMembers] = useState<Set<string>>(new Set());
+  const [creatingGroup, setCreatingGroup] = useState(false);
+
+  // ── Load all users + my friendships ─────────────────────────────────────────
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -60,7 +65,6 @@ export default function FriendsScreen() {
         .in('status', ['accepted', 'pending']),
     ]);
 
-    // Build a map of userId → relationship for O(1) lookup
     const relMap = new Map<string, Relationship>();
     (friendsData ?? []).forEach((row: any) => {
       const iRequested = row.requester_id === user.id;
@@ -108,13 +112,19 @@ export default function FriendsScreen() {
     ...(others.length   ? [{ title: 'ALL USERS', data: others  }] : []),
   ];
 
+  const acceptedFriends = useMemo(
+    () => allUsers.filter((u) => u.relationship?.status === 'accepted'),
+    [allUsers],
+  );
+
   // ── Actions ──────────────────────────────────────────────────────────────────
 
   async function sendRequest(toUserId: string) {
+    if (!user) return;
     setActionPending(toUserId);
     const { data, error } = await supabase
       .from('friendships')
-      .insert({ requester_id: user!.id, addressee_id: toUserId, status: 'pending' })
+      .insert({ requester_id: user.id, addressee_id: toUserId, status: 'pending' })
       .select('id')
       .single();
     if (error) {
@@ -160,6 +170,36 @@ export default function FriendsScreen() {
     setActionPending(null);
   }
 
+  async function createGroup() {
+    if (!groupName.trim() || selectedGroupMembers.size === 0 || !user) return;
+    setCreatingGroup(true);
+
+    const { data: group, error } = await supabase
+      .from('groups')
+      .insert({ name: groupName.trim(), created_by: user.id })
+      .select('id')
+      .single();
+
+    if (error || !group) {
+      console.error('createGroup error:', error);
+      Alert.alert('Error', error?.message ?? 'Could not create group.');
+      setCreatingGroup(false);
+      return;
+    }
+
+    const memberRows = [
+      { group_id: group.id, user_id: user.id },
+      ...[...selectedGroupMembers].map((uid) => ({ group_id: group.id, user_id: uid })),
+    ];
+
+    await supabase.from('group_members').insert(memberRows);
+
+    setGroupName('');
+    setSelectedGroupMembers(new Set());
+    setGroupModalVisible(false);
+    setCreatingGroup(false);
+  }
+
   const initials = (u: string) => u[0]?.toUpperCase() ?? '?';
 
   // ── Row renderer ─────────────────────────────────────────────────────────────
@@ -172,14 +212,12 @@ export default function FriendsScreen() {
     if (isPending) {
       action = <ActivityIndicator color={colors.accent} />;
     } else if (!rel) {
-      // No relationship — plus icon to add
       action = (
         <Pressable style={styles.addBtn} onPress={() => sendRequest(item.id)} hitSlop={8}>
           <PlusIcon />
         </Pressable>
       );
     } else if (rel.status === 'pending_received') {
-      // Incoming request — Accept + Decline
       action = (
         <View style={styles.requestActions}>
           <Pressable
@@ -195,7 +233,6 @@ export default function FriendsScreen() {
         </View>
       );
     } else if (rel.status === 'pending_sent') {
-      // Sent — tappable "Sent" badge to cancel
       action = (
         <Pressable
           style={styles.sentBadge}
@@ -204,7 +241,6 @@ export default function FriendsScreen() {
         </Pressable>
       );
     } else {
-      // Already friends — checkmark + remove on long press
       action = (
         <Pressable
           hitSlop={8}
@@ -268,6 +304,13 @@ export default function FriendsScreen() {
         )}
       </View>
 
+      {/* Make a Group button */}
+      <Pressable
+        style={styles.makeGroupBtn}
+        onPress={() => setGroupModalVisible(true)}>
+        <Text style={styles.makeGroupBtnText}>MAKE A GROUP</Text>
+      </Pressable>
+
       {loading ? (
         <View style={styles.centered}>
           <ActivityIndicator color={colors.accent} />
@@ -295,6 +338,86 @@ export default function FriendsScreen() {
         />
       )}
 
+      {/* ── Make a Group modal ─────────────────────────────────────────────── */}
+      <Modal
+        visible={groupModalVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setGroupModalVisible(false)}>
+        <SafeAreaView style={styles.modalContainer} edges={['top', 'bottom']}>
+
+          {/* Modal header */}
+          <View style={styles.modalHeader}>
+            <Pressable onPress={() => setGroupModalVisible(false)} hitSlop={12}>
+              <Text style={styles.modalCancel}>Cancel</Text>
+            </Pressable>
+            <Text style={styles.modalTitle}>NEW GROUP</Text>
+            <Pressable
+              onPress={createGroup}
+              disabled={!groupName.trim() || selectedGroupMembers.size === 0 || creatingGroup}
+              hitSlop={12}>
+              {creatingGroup ? (
+                <ActivityIndicator color={colors.accent} />
+              ) : (
+                <Text
+                  style={[
+                    styles.modalCreate,
+                    (!groupName.trim() || selectedGroupMembers.size === 0) && styles.modalCreateDisabled,
+                  ]}>
+                  Create
+                </Text>
+              )}
+            </Pressable>
+          </View>
+
+          {/* Group name input */}
+          <TextInput
+            style={styles.groupNameInput}
+            placeholder="Group name…"
+            placeholderTextColor={colors.textTertiary}
+            value={groupName}
+            onChangeText={setGroupName}
+            autoCapitalize="words"
+            returnKeyType="done"
+          />
+
+          {/* Friend selector */}
+          {acceptedFriends.length === 0 ? (
+            <View style={styles.centered}>
+              <Text style={styles.emptyBody}>Add friends first to make a group.</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={acceptedFriends}
+              keyExtractor={(item) => item.id}
+              contentContainerStyle={styles.listContent}
+              renderItem={({ item }) => {
+                const isSel = selectedGroupMembers.has(item.id);
+                return (
+                  <Pressable
+                    style={[styles.row, isSel && styles.rowSelected]}
+                    onPress={() => {
+                      setSelectedGroupMembers((prev) => {
+                        const next = new Set(prev);
+                        next.has(item.id) ? next.delete(item.id) : next.add(item.id);
+                        return next;
+                      });
+                    }}>
+                    <View style={styles.avatar}>
+                      <Text style={styles.avatarText}>{initials(item.username)}</Text>
+                    </View>
+                    <Text style={styles.rowName}>{item.username}</Text>
+                    <View style={[styles.checkbox, isSel && styles.checkboxSelected]}>
+                      {isSel && <TickIcon />}
+                    </View>
+                  </Pressable>
+                );
+              }}
+            />
+          )}
+        </SafeAreaView>
+      </Modal>
+
     </SafeAreaView>
   );
 }
@@ -314,6 +437,14 @@ function CheckBadge() {
     <Svg width={22} height={22} viewBox="0 0 22 22" fill="none">
       <Path d="M11 21a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z" stroke={colors.accent} strokeWidth={1.5} />
       <Polyline points="7,11 10,14 15,8" stroke={colors.accent} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+function TickIcon() {
+  return (
+    <Svg width={12} height={12} viewBox="0 0 12 12" fill="none">
+      <Polyline points="2,6 5,9 10,3" stroke={colors.accentDark} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
     </Svg>
   );
 }
@@ -356,6 +487,22 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
 
+  makeGroupBtn: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    paddingVertical: 14,
+    borderWidth: 1.5,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+  },
+  makeGroupBtnText: {
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.label,
+    color: colors.textPrimary,
+    letterSpacing: letterSpacing.caps,
+  },
+
   centered: {
     flex: 1,
     alignItems: 'center',
@@ -394,11 +541,14 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     gap: spacing.md,
   },
+  rowSelected: {
+    backgroundColor: `${colors.accent}1A`,
+  },
 
   avatar: {
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: radius.avatar,
     backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
@@ -416,12 +566,8 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
 
-  // + add button
-  addBtn: {
-    padding: spacing.xs,
-  },
+  addBtn: { padding: spacing.xs },
 
-  // Accept / Decline pair
   requestActions: { flexDirection: 'row', gap: spacing.sm },
   acceptBtn: {
     backgroundColor: colors.accent,
@@ -446,7 +592,6 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
 
-  // Sent badge (tappable to cancel)
   sentBadge: {
     borderRadius: radius.button,
     paddingHorizontal: spacing.md,
@@ -457,5 +602,62 @@ const styles = StyleSheet.create({
   sentBadgeText: {
     fontSize: fontSize.caption,
     color: colors.textSecondary,
+  },
+
+  // ── Group modal ──────────────────────────────────────────────────────────────
+
+  modalContainer: { flex: 1, backgroundColor: colors.bg },
+
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  modalCancel: {
+    fontSize: fontSize.body,
+    color: colors.textSecondary,
+  },
+  modalTitle: {
+    fontSize: fontSize.caption,
+    fontWeight: fontWeight.label,
+    color: colors.textPrimary,
+    letterSpacing: letterSpacing.caps,
+  },
+  modalCreate: {
+    fontSize: fontSize.body,
+    fontWeight: fontWeight.headline,
+    color: colors.textPrimary,
+  },
+  modalCreateDisabled: {
+    color: colors.textTertiary,
+  },
+
+  groupNameInput: {
+    fontSize: fontSize.headline,
+    fontWeight: fontWeight.headline,
+    color: colors.textPrimary,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderBottomWidth: 1.5,
+    borderBottomColor: colors.borderStrong,
+    marginBottom: spacing.sm,
+  },
+
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: radius.chip,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxSelected: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
 });
