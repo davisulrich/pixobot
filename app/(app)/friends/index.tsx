@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -7,6 +7,7 @@ import {
   Modal,
   Pressable,
   SectionList,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -34,6 +35,7 @@ type UserRow = {
 export default function FriendsScreen() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
+  const { add: addParam } = useLocalSearchParams<{ add?: string }>();
 
   const [allUsers, setAllUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,6 +96,20 @@ export default function FriendsScreen() {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [load]);
+
+  // Pre-fill search when opened from an invite link (pixobot://friends?add=username)
+  useEffect(() => {
+    if (addParam) setQuery(addParam);
+  }, [addParam]);
+
+  function shareInviteLink() {
+    if (!user) return;
+    const username = user.user_metadata?.username ?? '';
+    Share.share({
+      message: `Add me on Pixobot! Open this link to send me a friend request: pixobot://friends?add=${username}`,
+      url: `pixobot://friends?add=${username}`,
+    });
+  }
 
   // ── Client-side filter + section split ──────────────────────────────────────
 
@@ -281,7 +297,9 @@ export default function FriendsScreen() {
           <BackArrow />
         </Pressable>
         <Text style={styles.title}>Friends</Text>
-        <View style={styles.headerSpacer} />
+        <Pressable onPress={shareInviteLink} hitSlop={12} style={styles.inviteBtn}>
+          <ShareIcon />
+        </Pressable>
       </View>
 
       {/* Search bar */}
@@ -424,6 +442,15 @@ export default function FriendsScreen() {
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
 
+function ShareIcon() {
+  return (
+    <Svg width={22} height={22} viewBox="0 0 22 22" fill="none">
+      <Path d="M15 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM7 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM15 20a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke={colors.textPrimary} strokeWidth={1.5} />
+      <Path d="M9.5 11.5l3 2M12.5 8.5l-3 2" stroke={colors.textPrimary} strokeWidth={1.5} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
 function PlusIcon() {
   return (
     <Svg width={20} height={20} viewBox="0 0 20 20" fill="none">
@@ -469,6 +496,7 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   headerSpacer: { width: 36 },
+  inviteBtn: { width: 36, alignItems: 'flex-end' },
 
   searchBar: {
     flexDirection: 'row',
