@@ -1,20 +1,28 @@
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack, useNavigationContainerRef, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 import '../global.css';
 import { useAuthStore } from '@/lib/store/auth';
+import { useAudioSession } from '@/lib/hooks/useAudioSession';
 
 // Note: Auth gate lives at the root layout — same pattern Snapchat uses.
 // Unauthenticated users are redirected to (auth) before any protected screen renders.
 
 export default function RootLayout() {
   const { session, initialized } = useAuthStore();
+  useAudioSession();
   const segments = useSegments();
   const router = useRouter();
+  const navigationRef = useNavigationContainerRef();
+  const [navReady, setNavReady] = useState(false);
 
   useEffect(() => {
-    if (!initialized) return;
+    if (navigationRef?.isReady()) setNavReady(true);
+  });
+
+  useEffect(() => {
+    if (!initialized || !navReady) return;
 
     const inAuthGroup = segments[0] === '(auth)';
 
@@ -23,7 +31,7 @@ export default function RootLayout() {
     } else if (session && inAuthGroup) {
       router.replace('/(app)/camera');
     }
-  }, [session, initialized, segments]);
+  }, [session, initialized, segments, navReady]);
 
   return (
     <>

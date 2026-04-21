@@ -67,6 +67,7 @@ function SnapViewer({
     message.mediaType === 'video' ? message.mediaUrl : null,
     (p) => {
       p.loop = true;
+      p.audioMixingMode = 'doNotMix'; // pause background music while snap plays
       p.play();
     },
   );

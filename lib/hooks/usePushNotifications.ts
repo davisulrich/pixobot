@@ -1,3 +1,4 @@
+import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
@@ -24,7 +25,11 @@ export function usePushNotifications(userId: string | undefined) {
   useEffect(() => {
     if (!userId) return;
 
-    registerAndSaveToken(userId);
+    registerAndSaveToken(userId).catch((err) => {
+      // Non-critical — push registration fails gracefully in Expo Go
+      // and on simulators. Run `npx eas init` + use a dev build for real tokens.
+      console.log('Push registration skipped:', err?.message ?? err);
+    });
 
     // Navigate when user taps a notification
     responseListenerRef.current = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -66,7 +71,13 @@ async function registerAndSaveToken(userId: string) {
 
   if (finalStatus !== 'granted') return;
 
-  const tokenData = await Notifications.getExpoPushTokenAsync();
+  const projectId =
+    Constants.expoConfig?.extra?.eas?.projectId ??
+    Constants.easConfig?.projectId;
+
+  const tokenData = await Notifications.getExpoPushTokenAsync(
+    projectId ? { projectId } : undefined,
+  );
   const token = tokenData.data;
 
   await supabase

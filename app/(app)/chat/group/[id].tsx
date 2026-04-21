@@ -54,7 +54,7 @@ function parseMsg(raw: any, openedIds: Set<string>, myId: string): GroupMessage 
 function SnapViewer({ message, onDismiss }: { message: GroupMessage; onDismiss: () => void }) {
   const player = useVideoPlayer(
     message.mediaType === 'video' ? message.mediaUrl : null,
-    (p) => { p.loop = true; p.play(); },
+    (p) => { p.loop = true; p.audioMixingMode = 'doNotMix'; p.play(); },
   );
   const overlay = message.overlayData;
 
