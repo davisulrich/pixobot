@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "pixobot",
+    "name": "Blapnap",
     "slug": "pixobot",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -47,8 +47,8 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Pixobot needs your camera to capture photos and videos.",
-          "microphonePermission": "Pixobot needs your microphone to record video.",
+          "cameraPermission": "Blapnap needs your camera to capture photos and videos.",
+          "microphonePermission": "Blapnap needs your microphone to record video.",
           "recordAudioAndroid": true
         }
       ],

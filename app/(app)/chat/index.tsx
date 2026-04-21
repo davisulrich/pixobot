@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -59,112 +59,113 @@ export default function ChatListScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [presence, setPresence] = useState<Record<string, number | null>>({});
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
 
-    // ── DM conversations ──────────────────────────────────────────────────────
-    const { data: convData } = await supabase
-      .from('conversations')
-      .select(
-        `id, last_activity_at, user_id_1, user_id_2,
-         user1:users!conversations_user_id_1_fkey(id, username),
-         user2:users!conversations_user_id_2_fkey(id, username)`,
-      )
-      .or(`user_id_1.eq.${user.id},user_id_2.eq.${user.id}`)
-      .order('last_activity_at', { ascending: false });
+    // ── Step 1: parallel — conversations + group memberships ─────────────────
+    const [{ data: convData }, { data: myMemberships }] = await Promise.all([
+      supabase
+        .from('conversations')
+        .select(
+          `id, last_activity_at, user_id_1, user_id_2,
+           user1:users!conversations_user_id_1_fkey(id, username),
+           user2:users!conversations_user_id_2_fkey(id, username)`,
+        )
+        .or(`user_id_1.eq.${user.id},user_id_2.eq.${user.id}`)
+        .order('last_activity_at', { ascending: false }),
+      supabase
+        .from('group_members')
+        .select('group_id')
+        .eq('user_id', user.id),
+    ]);
 
+    const convIds = convData?.map((c) => c.id) ?? [];
+    const groupIds = myMemberships?.map((m: any) => m.group_id) ?? [];
+
+    // ── Step 2: parallel — messages + groups + group_messages ────────────────
+    const [{ data: msgData }, { data: groupsData }, { data: latestMsgs }] = await Promise.all([
+      convIds.length
+        ? supabase
+            .from('messages')
+            .select('id, conversation_id, media_type, sender_id, opened_at, created_at')
+            .in('conversation_id', convIds)
+            .order('created_at', { ascending: false })
+        : Promise.resolve({ data: [] as any[], error: null }),
+      groupIds.length
+        ? supabase
+            .from('groups')
+            .select('id, name, last_activity_at')
+            .in('id', groupIds)
+            .order('last_activity_at', { ascending: false })
+        : Promise.resolve({ data: [] as any[], error: null }),
+      groupIds.length
+        ? supabase
+            .from('group_messages')
+            .select('id, group_id, sender_id, media_type, created_at, sender:users!group_messages_sender_id_fkey(username)')
+            .in('group_id', groupIds)
+            .order('created_at', { ascending: false })
+        : Promise.resolve({ data: [] as any[], error: null }),
+    ]);
+
+    // ── Build DM rows ─────────────────────────────────────────────────────────
     const dmRows: ConvRow[] = [];
-
-    if (convData?.length) {
-      const convIds = convData.map((c) => c.id);
-      const { data: msgData } = await supabase
-        .from('messages')
-        .select('id, conversation_id, media_type, sender_id, opened_at, created_at')
-        .in('conversation_id', convIds)
-        .order('created_at', { ascending: false });
-
-      const latestByConv = new Map<string, any>();
-      msgData?.forEach((msg) => {
-        if (!latestByConv.has(msg.conversation_id)) latestByConv.set(msg.conversation_id, msg);
+    const latestByConv = new Map<string, any>();
+    msgData?.forEach((msg) => {
+      if (!latestByConv.has(msg.conversation_id)) latestByConv.set(msg.conversation_id, msg);
+    });
+    (convData as any[] ?? []).forEach((c) => {
+      const msg = latestByConv.get(c.id);
+      dmRows.push({
+        kind: 'dm',
+        id: c.id,
+        lastActivityAt: c.last_activity_at,
+        otherUser: c.user_id_1 === user.id ? c.user2 : c.user1,
+        latestMessage: msg
+          ? { mediaType: msg.media_type, senderId: msg.sender_id, openedAt: msg.opened_at, createdAt: msg.created_at }
+          : null,
       });
+    });
 
-      (convData as any[]).forEach((c) => {
-        const msg = latestByConv.get(c.id);
-        dmRows.push({
-          kind: 'dm',
-          id: c.id,
-          lastActivityAt: c.last_activity_at,
-          otherUser: c.user_id_1 === user.id ? c.user2 : c.user1,
-          latestMessage: msg
-            ? { mediaType: msg.media_type, senderId: msg.sender_id, openedAt: msg.opened_at, createdAt: msg.created_at }
-            : null,
-        });
-      });
-    }
-
-    // ── Group conversations ───────────────────────────────────────────────────
+    // ── Build group rows ──────────────────────────────────────────────────────
     const groupRows: GroupRow[] = [];
+    const latestByGroup = new Map<string, any>();
+    (latestMsgs ?? []).forEach((m: any) => {
+      if (!latestByGroup.has(m.group_id)) latestByGroup.set(m.group_id, m);
+    });
 
-    const { data: myMemberships } = await supabase
-      .from('group_members')
-      .select('group_id')
-      .eq('user_id', user.id);
+    // Step 3: only 1 remaining dependent query — which group snaps are opened
+    const latestMsgIds = [...latestByGroup.values()].map((m) => m.id);
+    const { data: opens } = latestMsgIds.length
+      ? await supabase
+          .from('group_message_opens')
+          .select('message_id')
+          .in('message_id', latestMsgIds)
+          .eq('user_id', user.id)
+      : { data: [] };
 
-    if (myMemberships?.length) {
-      const groupIds = myMemberships.map((m: any) => m.group_id);
-
-      const [{ data: groupsData }, { data: latestMsgs }] = await Promise.all([
-        supabase
-          .from('groups')
-          .select('id, name, last_activity_at')
-          .in('id', groupIds)
-          .order('last_activity_at', { ascending: false }),
-        supabase
-          .from('group_messages')
-          .select('id, group_id, sender_id, media_type, created_at, sender:users!group_messages_sender_id_fkey(username)')
-          .in('group_id', groupIds)
-          .order('created_at', { ascending: false }),
-      ]);
-
-      const latestByGroup = new Map<string, any>();
-      (latestMsgs ?? []).forEach((m: any) => {
-        if (!latestByGroup.has(m.group_id)) latestByGroup.set(m.group_id, m);
+    const openedIds = new Set((opens ?? []).map((o: any) => o.message_id));
+    (groupsData ?? []).forEach((g: any) => {
+      const msg = latestByGroup.get(g.id);
+      const isUnread = msg && msg.sender_id !== user.id && !openedIds.has(msg.id);
+      groupRows.push({
+        kind: 'group',
+        id: g.id,
+        name: g.name,
+        lastActivityAt: msg ? msg.created_at : g.last_activity_at,
+        latestMessage: msg
+          ? {
+              mediaType: msg.media_type,
+              senderId: msg.sender_id,
+              senderUsername: (msg as any).sender?.username ?? '',
+              openedAt: null,
+              createdAt: msg.created_at,
+            }
+          : null,
+        unread: !!isUnread,
       });
-
-      // Check which of those latest messages the current user has opened
-      const latestMsgIds = [...latestByGroup.values()].map((m) => m.id);
-      const { data: opens } = latestMsgIds.length
-        ? await supabase
-            .from('group_message_opens')
-            .select('message_id')
-            .in('message_id', latestMsgIds)
-            .eq('user_id', user.id)
-        : { data: [] };
-
-      const openedIds = new Set((opens ?? []).map((o: any) => o.message_id));
-
-      (groupsData ?? []).forEach((g: any) => {
-        const msg = latestByGroup.get(g.id);
-        const isUnread = msg && msg.sender_id !== user.id && !openedIds.has(msg.id);
-        groupRows.push({
-          kind: 'group',
-          id: g.id,
-          name: g.name,
-          lastActivityAt: msg ? msg.created_at : g.last_activity_at,
-          latestMessage: msg
-            ? {
-                mediaType: msg.media_type,
-                senderId: msg.sender_id,
-                senderUsername: (msg as any).sender?.username ?? '',
-                openedAt: null,
-                createdAt: msg.created_at,
-              }
-            : null,
-          unread: !!isUnread,
-        });
-      });
-    }
+    });
 
     // Merge and sort by lastActivityAt descending
     const all: ListRow[] = [...dmRows, ...groupRows].sort(
@@ -175,24 +176,34 @@ export default function ChatListScreen() {
     setLoading(false);
     setRefreshing(false);
 
+    // Presence update fires independently so it doesn't block the list render
     const otherUserIds = dmRows.map((r) => r.otherUser.id);
     if (otherUserIds.length) {
-      const presenceData = await getPresence(otherUserIds);
-      setPresence(presenceData);
+      getPresence(otherUserIds).then(setPresence);
     }
   }, [user]);
+
+  // Debounced reload — realtime fires once per table change; debouncing prevents
+  // 4 back-to-back full reloads when multiple tables update simultaneously.
+  const debouncedLoad = useCallback(() => {
+    if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = setTimeout(load, 300);
+  }, [load]);
 
   useEffect(() => {
     load();
     const channel = supabase
       .channel(`chat-list-${Date.now()}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'group_messages' }, load)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'group_message_opens' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, debouncedLoad)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, debouncedLoad)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'group_messages' }, debouncedLoad)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'group_message_opens' }, debouncedLoad)
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [load]);
+    return () => {
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+      supabase.removeChannel(channel);
+    };
+  }, [load, debouncedLoad]);
 
   function getDmStatus(conv: ConvRow): { label: string; unread: boolean } {
     const msg = conv.latestMessage;
@@ -231,6 +242,10 @@ export default function ChatListScreen() {
       <FlatList
         data={rows}
         keyExtractor={(item) => item.kind + item.id}
+        removeClippedSubviews
+        maxToRenderPerBatch={10}
+        initialNumToRender={12}
+        windowSize={8}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}

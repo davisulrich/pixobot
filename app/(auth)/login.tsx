@@ -8,10 +8,11 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  View,
 } from 'react-native';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { TinyCatBalloon } from '@/components/TinyCatBalloon';
 import { supabase } from '@/lib/supabase';
 import { colors, fontSize, fontWeight, radius, spacing } from '@/tokens';
 
@@ -42,12 +43,16 @@ export default function LoginScreen() {
       <KeyboardAvoidingView
         style={styles.inner}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Pixobot</Text>
-          <Text style={styles.subtitle}>Sign in to continue</Text>
-        </View>
+        <Animated.View entering={FadeIn.duration(800)} style={styles.catContainer}>
+          <TinyCatBalloon />
+        </Animated.View>
 
-        <View style={styles.form}>
+        <Animated.View entering={FadeInDown.duration(500).springify()} style={styles.header}>
+          <Text style={styles.title}>Blapnap</Text>
+          <Text style={styles.subtitle}>Sign in to continue</Text>
+        </Animated.View>
+
+        <Animated.View entering={FadeInDown.delay(100).duration(500).springify()} style={styles.form}>
           <TextInput
             style={styles.input}
             placeholder="Username"
@@ -78,8 +83,9 @@ export default function LoginScreen() {
               <Text style={styles.buttonText}>Log In</Text>
             )}
           </Pressable>
-        </View>
+        </Animated.View>
 
+        <Animated.View entering={FadeInDown.delay(200).duration(500).springify()}>
         <Link href="/(auth)/signup" asChild>
           <Pressable style={styles.footer}>
             <Text style={styles.footerText}>
@@ -88,6 +94,7 @@ export default function LoginScreen() {
             </Text>
           </Pressable>
         </Link>
+        </Animated.View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -103,6 +110,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     justifyContent: 'center',
     gap: spacing.xxl,
+  },
+  catContainer: {
+    alignItems: 'center',
   },
   header: {
     gap: spacing.sm,

@@ -8,8 +8,8 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  View,
 } from 'react-native';
+import Animated, { FadeInDown } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { supabase } from '@/lib/supabase';
@@ -65,12 +65,12 @@ export default function SignupScreen() {
       <KeyboardAvoidingView
         style={styles.inner}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-        <View style={styles.header}>
+        <Animated.View entering={FadeInDown.duration(500).springify()} style={styles.header}>
           <Text style={styles.title}>Create account</Text>
           <Text style={styles.subtitle}>Pick a username to get started</Text>
-        </View>
+        </Animated.View>
 
-        <View style={styles.form}>
+        <Animated.View entering={FadeInDown.delay(100).duration(500).springify()} style={styles.form}>
           <TextInput
             style={styles.input}
             placeholder="Username"
@@ -101,14 +101,16 @@ export default function SignupScreen() {
               <Text style={styles.buttonText}>Create Account</Text>
             )}
           </Pressable>
-        </View>
+        </Animated.View>
 
+        <Animated.View entering={FadeInDown.delay(200).duration(500).springify()}>
         <Pressable style={styles.footer} onPress={() => router.back()}>
           <Text style={styles.footerText}>
             Already have an account?{' '}
             <Text style={styles.footerLink}>Log in</Text>
           </Text>
         </Pressable>
+        </Animated.View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
