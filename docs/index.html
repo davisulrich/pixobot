@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blapnap — Send blaps. Make friends.</title>
+  <meta name="description" content="Blapnap is a fast, fun way to send photo and video blaps to friends and groups. Available on iOS.">
+  <meta property="og:title" content="Blapnap">
+  <meta property="og:description" content="Send blaps. Make friends.">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --black:  #0a0a0a;
+      --lime:   #B9FF6B;
+      --pink:   #FF69D4;
+      --yellow: #F5C842;
+      --white:  #ffffff;
+      --gray:   #1a1a1a;
+      --text2:  rgba(255,255,255,0.55);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--black);
+      color: var(--white);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      line-height: 1.5;
+      overflow-x: hidden;
+    }
+
+    /* ── NAV ───────────────────────────────────────────────────────────── */
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 40px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      position: sticky;
+      top: 0;
+      background: rgba(10,10,10,0.92);
+      backdrop-filter: blur(12px);
+      z-index: 100;
+    }
+
+    .nav-logo {
+      font-size: 22px;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      color: var(--lime);
+    }
+
+    .nav-link {
+      color: var(--text2);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+    .nav-link:hover { color: var(--white); }
+
+    /* ── HERO ──────────────────────────────────────────────────────────── */
+    .hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 100px 24px 80px;
+      gap: 32px;
+    }
+
+    /* Pixel cat — rendered as CSS blocks (NES 24×28 @ 8px/pixel) */
+    .pixel-cat {
+      position: relative;
+      width: 192px;
+      height: 224px;
+      image-rendering: pixelated;
+      flex-shrink: 0;
+      animation: catBob 1.2s steps(1) infinite;
+    }
+    @keyframes catBob {
+      0%, 49%  { transform: translateY(0); }
+      50%, 99% { transform: translateY(-8px); }
+    }
+
+    .px {
+      position: absolute;
+      width: 8px;
+      height: 8px;
+    }
+
+    .hero-eyebrow {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--pink);
+    }
+
+    .hero-title {
+      font-size: clamp(56px, 12vw, 96px);
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      line-height: 0.95;
+      color: var(--white);
+    }
+
+    .hero-title span { color: var(--lime); }
+
+    .hero-sub {
+      font-size: clamp(17px, 3vw, 22px);
+      color: var(--text2);
+      max-width: 420px;
+    }
+
+    .btn-store {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--yellow);
+      color: var(--black);
+      font-weight: 800;
+      font-size: 16px;
+      padding: 16px 32px;
+      border-radius: 0;
+      text-decoration: none;
+      letter-spacing: -0.01em;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .btn-store:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(245,200,66,0.35);
+    }
+
+    .btn-store svg { flex-shrink: 0; }
+
+    /* ── FEATURES ──────────────────────────────────────────────────────── */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 2px;
+      padding: 0 2px 2px;
+    }
+
+    .feature {
+      background: var(--gray);
+      padding: 40px 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .feature-icon {
+      width: 48px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+    }
+
+    .feature-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--lime);
+    }
+
+    .feature h3 {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+    }
+
+    .feature p {
+      font-size: 15px;
+      color: var(--text2);
+      line-height: 1.6;
+    }
+
+    /* ── MARQUEE STRIP ─────────────────────────────────────────────────── */
+    .strip {
+      overflow: hidden;
+      border-top: 2px solid var(--yellow);
+      border-bottom: 2px solid var(--yellow);
+      background: var(--yellow);
+      padding: 14px 0;
+      margin: 60px 0;
+    }
+
+    .strip-inner {
+      display: flex;
+      gap: 48px;
+      white-space: nowrap;
+      animation: marquee 18s linear infinite;
+      width: max-content;
+    }
+
+    @keyframes marquee {
+      from { transform: translateX(0); }
+      to   { transform: translateX(-50%); }
+    }
+
+    .strip-inner span {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--black);
+    }
+
+    .strip-dot {
+      color: var(--pink);
+    }
+
+    /* ── HOW IT WORKS ──────────────────────────────────────────────────── */
+    .how {
+      padding: 80px 40px;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--pink);
+      margin-bottom: 20px;
+    }
+
+    .how h2 {
+      font-size: clamp(32px, 6vw, 52px);
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      line-height: 1.1;
+      margin-bottom: 56px;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 40px;
+    }
+
+    .step { display: flex; flex-direction: column; gap: 12px; }
+
+    .step-num {
+      font-size: 48px;
+      font-weight: 900;
+      color: var(--lime);
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    .step h3 {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+
+    .step p {
+      font-size: 14px;
+      color: var(--text2);
+      line-height: 1.6;
+    }
+
+    /* ── CTA ───────────────────────────────────────────────────────────── */
+    .cta {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 100px 24px;
+      gap: 28px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .cta h2 {
+      font-size: clamp(36px, 7vw, 64px);
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      line-height: 1;
+    }
+
+    .cta h2 em {
+      font-style: normal;
+      color: var(--pink);
+    }
+
+    /* ── FOOTER ────────────────────────────────────────────────────────── */
+    footer {
+      border-top: 1px solid rgba(255,255,255,0.06);
+      padding: 32px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    footer .logo { font-size: 16px; font-weight: 900; color: var(--lime); }
+
+    .footer-links {
+      display: flex;
+      gap: 24px;
+    }
+
+    .footer-links a {
+      font-size: 13px;
+      color: var(--text2);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    .footer-links a:hover { color: var(--white); }
+
+    footer .copy {
+      font-size: 12px;
+      color: var(--text2);
+      width: 100%;
+      text-align: right;
+    }
+
+    @media (max-width: 600px) {
+      nav { padding: 16px 20px; }
+      footer { padding: 24px 20px; flex-direction: column; align-items: flex-start; }
+      footer .copy { text-align: left; }
+      .how { padding: 60px 24px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <span class="nav-logo">blapnap</span>
+  <a class="nav-link" href="#download">Download</a>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+
+  <!-- Pixel art cat (CSS blocks — same sprite from the app) -->
+  <div class="pixel-cat" aria-hidden="true" id="cat"></div>
+
+  <p class="hero-eyebrow">Now on iOS</p>
+
+  <h1 class="hero-title">Send blaps.<br><span>Make friends.</span></h1>
+
+  <p class="hero-sub">Photo and video blaps that disappear. Groups, DMs, and nothing you don't need.</p>
+
+  <a class="btn-store" href="#download" id="download">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+      <path d="M14.5 10.5C14.49 8.83 15.36 7.59 17.1 6.68C16.13 5.28 14.64 4.5 12.66 4.35C10.79 4.2 8.74 5.42 8 5.42C7.22 5.42 5.4 4.4 3.96 4.4C1 4.45 -2.98e-07 6.62 -2.98e-07 8.87C-2.98e-07 13.23 2.94 18.5 5.86 18.5C6.83 18.52 7.51 17.89 9.24 17.89C10.92 17.89 11.55 18.5 12.68 18.5C15.63 18.46 18.3 13.69 19 11.12C17.1 10.21 14.51 9.19 14.5 10.5Z" fill="currentColor"/>
+      <path d="M11.6 3C12.38 2.08 12.88 0.8 12.7 0C11.57 0.05 10.22 0.74 9.41 1.67C8.67 2.52 8.1 3.82 8.31 5.05C9.54 5.14 10.8 4.42 11.6 3Z" fill="currentColor"/>
+    </svg>
+    Download on the App Store
+  </a>
+
+</section>
+
+<!-- FEATURES -->
+<section class="features">
+  <div class="feature">
+    <div class="feature-icon">📸</div>
+    <span class="feature-label">Blaps</span>
+    <h3>Photos &amp; videos that hit different</h3>
+    <p>Tap to take a photo, hold for video. Draw, text, and send — all in seconds.</p>
+  </div>
+  <div class="feature">
+    <div class="feature-icon">👥</div>
+    <span class="feature-label">Groups</span>
+    <h3>Send to everyone at once</h3>
+    <p>Create groups and blast a blap to all your people without doing it one by one.</p>
+  </div>
+  <div class="feature">
+    <div class="feature-icon">🔔</div>
+    <span class="feature-label">Always on</span>
+    <h3>Never miss a blap</h3>
+    <p>Instant push notifications when someone sends you something or accepts your friend request.</p>
+  </div>
+  <div class="feature">
+    <div class="feature-icon">🔗</div>
+    <span class="feature-label">Invite</span>
+    <h3>Bring your friends along</h3>
+    <p>Share your invite link anywhere — one tap and they're added to your friends list automatically.</p>
+  </div>
+</section>
+
+<!-- MARQUEE -->
+<div class="strip" aria-hidden="true">
+  <div class="strip-inner">
+    <span>Send a blap</span><span class="strip-dot">✦</span>
+    <span>Open it once</span><span class="strip-dot">✦</span>
+    <span>Group chat</span><span class="strip-dot">✦</span>
+    <span>Add friends</span><span class="strip-dot">✦</span>
+    <span>Tap to photo</span><span class="strip-dot">✦</span>
+    <span>Hold for video</span><span class="strip-dot">✦</span>
+    <span>Send a blap</span><span class="strip-dot">✦</span>
+    <span>Open it once</span><span class="strip-dot">✦</span>
+    <span>Group chat</span><span class="strip-dot">✦</span>
+    <span>Add friends</span><span class="strip-dot">✦</span>
+    <span>Tap to photo</span><span class="strip-dot">✦</span>
+    <span>Hold for video</span><span class="strip-dot">✦</span>
+  </div>
+</div>
+
+<!-- HOW IT WORKS -->
+<section class="how">
+  <p class="section-title">How it works</p>
+  <h2>Three steps,<br>zero friction.</h2>
+  <div class="steps">
+    <div class="step">
+      <span class="step-num">01</span>
+      <h3>Create an account</h3>
+      <p>Pick a username and password. No email, no phone number, no nonsense.</p>
+    </div>
+    <div class="step">
+      <span class="step-num">02</span>
+      <h3>Add your friends</h3>
+      <p>Search by username or share your invite link. They're on your list in one tap.</p>
+    </div>
+    <div class="step">
+      <span class="step-num">03</span>
+      <h3>Start blapping</h3>
+      <p>Tap the shutter, add a caption or drawing, pick who gets it, and send.</p>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta">
+  <h2>Ready to<br><em>blapnap?</em></h2>
+  <p style="color:var(--text2); font-size:17px; max-width:340px;">Free on the App Store. Just you, your friends, and the blaps.</p>
+  <a class="btn-store" href="#">
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+      <path d="M14.5 10.5C14.49 8.83 15.36 7.59 17.1 6.68C16.13 5.28 14.64 4.5 12.66 4.35C10.79 4.2 8.74 5.42 8 5.42C7.22 5.42 5.4 4.4 3.96 4.4C1 4.45 -2.98e-07 6.62 -2.98e-07 8.87C-2.98e-07 13.23 2.94 18.5 5.86 18.5C6.83 18.52 7.51 17.89 9.24 17.89C10.92 17.89 11.55 18.5 12.68 18.5C15.63 18.46 18.3 13.69 19 11.12C17.1 10.21 14.51 9.19 14.5 10.5Z" fill="currentColor"/>
+      <path d="M11.6 3C12.38 2.08 12.88 0.8 12.7 0C11.57 0.05 10.22 0.74 9.41 1.67C8.67 2.52 8.1 3.82 8.31 5.05C9.54 5.14 10.8 4.42 11.6 3Z" fill="currentColor"/>
+    </svg>
+    Download on the App Store
+  </a>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <span class="logo">blapnap</span>
+  <div class="footer-links">
+    <a href="privacy.html">Privacy Policy</a>
+    <a href="support.html">Support</a>
+  </div>
+  <span class="copy">&copy; 2026 Blapnap</span>
+</footer>
+
+<!-- Pixel cat sprite (same palette as the app) -->
+<script>
+(function () {
+  const K = '#0a0a0a', G = '#B9FF6B', W = '#ffffff', P = '#FF9BDE';
+
+  // 24×28 cat sprite — tail-up idle frame
+  const GRID = [
+    '........................',
+    '........................',
+    '........................',
+    '....KK........KK........',
+    '...KKKK......KKKK.......',
+    '..KKPPKK....KKPPKK......',
+    '..KKPKKKKKKKKKKPKK......',
+    '.KKKKKKKKKKKKKKKKKK.....',
+    '.KKKKGGKKKKKKGGKKKK.....',
+    '.KKKGWGKKKKKKGWGKKK.....',
+    '.KKKGGGKKKKKKGGGKKK.....',
+    '.KKKKKKKKPPKKKKKKKK.....',
+    '.KKKKKKKKKKKKKKKKKK.....',
+    '..KKKKKKKKKKKKKKKK......',
+    '...KKKKKKKKKKKKKK..KK...',
+    '..KKKKKKKKKKKKKKKKKKK...',
+    '.KKKKKKKKKKKKKKKKKKKK...',
+    '.KKKKKKKKKKKKKKKKKKK....',
+    '.KKKKKKKKKKKKKKKKKK.....',
+    '.KKKKKKKKKKKKKKKKKK.....',
+    '.KKKKKKKKKKKKKKKKKK.....',
+    '.KKKKKKKKKKKKKKKKKK.....',
+    '..KKKKKK....KKKKKK......',
+    '..KKKKKK....KKKKKK......',
+    '..KKKKKK....KKKKKK......',
+    '...KKKK......KKKK.......',
+    '........................',
+    '........................',
+  ];
+
+  const palette = { '.': null, K, G, W, P };
+  const PX = 8;
+  const container = document.getElementById('cat');
+
+  for (let r = 0; r < GRID.length; r++) {
+    for (let c = 0; c < GRID[r].length; c++) {
+      const color = palette[GRID[r][c]];
+      if (!color) continue;
+      const el = document.createElement('div');
+      el.className = 'px';
+      el.style.cssText = `left:${c*PX}px;top:${r*PX}px;background:${color}`;
+      container.appendChild(el);
+    }
+  }
+})();
+</script>
+
+</body>
+</html>

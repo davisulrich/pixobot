@@ -173,10 +173,14 @@ export default function SettingsScreen() {
                   text: 'Yes, delete my account',
                   style: 'destructive',
                   onPress: async () => {
-                    // Note: Supabase doesn't expose admin.deleteUser to the client SDK.
-                    // We sign out and rely on the cascade delete in the schema
-                    // (users.id → auth.users ON DELETE CASCADE) when an admin purge runs.
-                    // For v1 this is acceptable — a backend function can be added later.
+                    const { data: { session } } = await supabase.auth.getSession();
+                    const res = await supabase.functions.invoke('delete-account', {
+                      headers: { Authorization: `Bearer ${session?.access_token}` },
+                    });
+                    if (res.error) {
+                      Alert.alert('Error', 'Could not delete account. Please try again.');
+                      return;
+                    }
                     await supabase.auth.signOut();
                     Alert.alert('Account deleted', 'Your account has been removed.');
                   },
